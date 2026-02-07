@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
-import Image from "next/image";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -147,22 +146,7 @@ function Pill({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** Logo from public/logo.png (served at /logo.png in Next.js) */
-function Logo({ size = 34, className }: { size?: number; className?: string }) {
-  return (
-    <span className={cn("relative block shrink-0 overflow-hidden rounded-xl", className)} style={{ width: size, height: size, minWidth: size, minHeight: size }}>
-      <Image
-        src="/logo.png"
-        alt={BRAND.name}
-        width={size}
-        height={size}
-        className="object-contain"
-        priority
-        sizes={`${size}px`}
-      />
-    </span>
-  );
-}
+import { Logo } from "@/components/Logo";
 
 function TopNav() {
   const [open, setOpen] = useState(false);
@@ -397,7 +381,7 @@ function HeroMock() {
           <div className="md:col-span-7">
             <div className="flex items-center justify-between border-b border-black/5 px-5 py-4">
               <div className="flex items-center gap-3">
-                <Logo size={40} className="shrink-0 rounded-2xl ring-1 ring-black/10" />
+                <Logo size={40} className="shrink-0" />
                 <div>
                   <div className="text-sm font-semibold text-zinc-950">Inbox</div>
                   <div className="text-xs text-zinc-600">Support threads</div>
@@ -1592,7 +1576,7 @@ function CTADevice() {
       <div className="relative overflow-hidden rounded-[34px] bg-white/8 ring-1 ring-white/15 backdrop-blur">
         <div className="flex items-center justify-between px-6 py-4">
           <div className="flex items-center gap-3">
-            <Logo size={40} className="shrink-0 rounded-2xl bg-white/10 p-1" />
+            <Logo size={40} className="shrink-0" />
             <div>
               <div className="text-sm font-semibold text-white/90">Case timeline</div>
               <div className="text-xs text-white/50">Live actions</div>

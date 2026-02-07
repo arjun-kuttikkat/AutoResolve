@@ -1,6 +1,6 @@
 "use client";
 
-import Image from "next/image";
+import { Logo } from "@/components/Logo";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
@@ -64,13 +64,7 @@ export default function CustomersPage() {
           <div className="space-y-8">
             <div className="space-y-3">
               <Link href="/" className="flex items-center gap-3">
-                <Image
-                  src="/logo.png"
-                  alt="AutoResolve"
-                  width={40}
-                  height={40}
-                  className="h-10 w-10 object-contain"
-                />
+                <Logo size={40} />
                 <div>
                   <p className="font-display text-lg font-semibold tracking-tight">
                     AutoResolve

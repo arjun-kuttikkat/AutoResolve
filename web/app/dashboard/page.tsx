@@ -4,9 +4,26 @@
 // Tailwind required. Framer Motion + lucide-react required.
 // Drop-in for Next.js App Router: app/dashboard/page.tsx (or any route).
 
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useEffect, useRef } from "react";
+import { useSearchParams } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { GeistSans, GeistMono } from "geist/font";
+import {
+  getGmailAuthUrl,
+  getAuthStatus,
+  getThreads,
+  getReplies,
+  approveReply,
+  rejectReply,
+  syncEmails,
+  getUserMode,
+  setUserMode,
+  disconnectGmail,
+  generateReplyForThread,
+  getGuardrails,
+  setGuardrails,
+} from "@/lib/api";
+import { Logo } from "@/components/Logo";
 import {
   ArrowRight,
   Bell,
@@ -94,42 +111,6 @@ function Noise() {
           "radial-gradient(circle at 20% 10%, rgba(0,0,0,.08), transparent 35%), radial-gradient(circle at 80% 0%, rgba(0,0,0,.05), transparent 40%), radial-gradient(circle at 50% 90%, rgba(0,0,0,.06), transparent 40%)",
       }}
     />
-  );
-}
-
-function LogoMark({ size = 34 }: { size?: number }) {
-  return (
-    <div
-      className="grid place-items-center rounded-xl ring-1 ring-black/10"
-      style={{
-        width: size,
-        height: size,
-        background:
-          "linear-gradient(135deg, rgba(255,255,255,.92), rgba(255,255,255,.65))",
-        boxShadow: "0 10px 30px rgba(0,0,0,.10)",
-      }}
-    >
-      <svg
-        width={Math.max(18, Math.round(size * 0.62))}
-        height={Math.max(18, Math.round(size * 0.62))}
-        viewBox="0 0 64 64"
-        fill="none"
-        xmlns="http://www.w3.org/2000/svg"
-        aria-hidden
-      >
-        <path
-          d="M12 36c10-18 18-24 52-28-6 34-14 42-32 48-12 4-22-2-20-20Z"
-          fill="url(#g)"
-        />
-        <defs>
-          <linearGradient id="g" x1="12" y1="8" x2="64" y2="56" gradientUnits="userSpaceOnUse">
-            <stop stopColor={BRAND.a} />
-            <stop offset="0.5" stopColor={BRAND.b} />
-            <stop offset="1" stopColor={BRAND.c} />
-          </linearGradient>
-        </defs>
-      </svg>
-    </div>
   );
 }
 
@@ -252,65 +233,27 @@ function SplitBar({ className }: { className?: string }) {
   );
 }
 
-type CaseStatus = "Draft" | "Running" | "Awaiting reply" | "Needs approval" | "Resolved" | "Closed";
-
-type CaseItem = {
-  id: string;
-  merchant: string;
-  category: string;
-  createdAt: string;
-  updatedAt: string;
-  status: CaseStatus;
-  mode: "Approval" | "Auto";
-  desired: string;
-  lastAction: string;
-  nextAction: string;
-  offer?: string;
-  confidence: number; // 0..100
-};
-
-function statusColor(s: CaseStatus) {
-  switch (s) {
-    case "Running":
-      return BRAND.b;
-    case "Awaiting reply":
-      return BRAND.a;
-    case "Needs approval":
-      return BRAND.c;
-    case "Resolved":
-      return "#22C55E";
-    case "Closed":
-      return "#71717A";
-    default:
-      return "#111827";
-  }
-}
-
-function modeBadge(mode: "Approval" | "Auto") {
-  return mode === "Auto" ? { label: "Auto", dot: BRAND.b } : { label: "Approval", dot: BRAND.a };
-}
-
-function kpiTrendColor(kind: "up" | "down" | "flat") {
-  if (kind === "up") return "#22C55E";
-  if (kind === "down") return BRAND.c;
-  return "#71717A";
-}
-
-function formatCaseId(id: string) {
-  return `#${id}`;
-}
-
-function Mono({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <span className={cn(GeistMono.className, className)}>{children}</span>;
-}
-
-function Sidebar({ active, onNavigate }: { active: string; onNavigate: (k: string) => void }) {
+function Sidebar({
+  active,
+  onNavigate,
+  userId,
+  connected,
+  userMode,
+  onConnectGmail,
+  onModeChange,
+}: {
+  active: string;
+  onNavigate: (k: string) => void;
+  userId?: string | null;
+  connected?: boolean;
+  userMode?: "auto" | "approval";
+  onConnectGmail?: () => void;
+  onModeChange?: (mode: "auto" | "approval") => void;
+}) {
   const nav = [
-    { k: "overview", label: "Overview", icon: Inbox },
-    { k: "cases", label: "Cases", icon: ListChecks },
     { k: "inbox", label: "Inbox", icon: Mail },
-    { k: "automation", label: "Automation", icon: Bot },
-    { k: "security", label: "Security", icon: Shield },
+    { k: "approval", label: "Approval queue", icon: ListChecks },
+    { k: "guardrails", label: "Guardrails", icon: Shield },
     { k: "settings", label: "Settings", icon: Settings },
   ];
 
@@ -323,7 +266,7 @@ function Sidebar({ active, onNavigate }: { active: string; onNavigate: (k: strin
 
         <div className="relative flex h-full flex-col p-5">
           <div className="flex items-center gap-3">
-            <LogoMark />
+            <Logo size={34} />
             <div className="leading-tight">
               <div className="text-sm font-semibold text-zinc-950">{BRAND.name}</div>
               <div className="text-[11px] text-zinc-600">Autonomous email resolution</div>
@@ -339,30 +282,55 @@ function Sidebar({ active, onNavigate }: { active: string; onNavigate: (k: strin
               </Chip>
             </div>
             <div className="mt-3 text-sm font-semibold text-zinc-950">Personal</div>
-            <div className="mt-1 text-xs text-zinc-600">Gmail connected • Approval by default</div>
-
-            <div className="mt-4 grid gap-2">
-              <button
-                type="button"
-                className="flex items-center justify-between rounded-2xl bg-black/5 px-3 py-2 text-xs font-semibold text-zinc-700 transition hover:bg-black/7"
-              >
-                <span className="inline-flex items-center gap-2">
-                  <KeyRound className="h-4 w-4" style={{ color: BRAND.a }} />
-                  API key
-                </span>
-                <span className={cn("text-zinc-600", GeistMono.className)}>•••• 4F2A</span>
-              </button>
-              <button
-                type="button"
-                className="flex items-center justify-between rounded-2xl bg-black/5 px-3 py-2 text-xs font-semibold text-zinc-700 transition hover:bg-black/7"
-              >
-                <span className="inline-flex items-center gap-2">
-                  <CreditCard className="h-4 w-4" style={{ color: BRAND.c }} />
-                  Billing
-                </span>
-                <span className="text-zinc-600">Manage</span>
-              </button>
+            <div className="mt-1 text-xs text-zinc-600">
+              {connected
+                ? `Gmail connected • ${userMode === "auto" ? "Auto" : "Approval"} mode`
+                : "Connect Gmail to start"}
             </div>
+
+            {connected && onModeChange ? (
+              <div className="mt-3 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => onModeChange("approval")}
+                  className={cn(
+                    "flex-1 rounded-xl px-2 py-1.5 text-xs font-semibold transition",
+                    userMode === "approval"
+                      ? "bg-white ring-1 ring-black/10 text-zinc-950"
+                      : "bg-black/5 text-zinc-600 hover:bg-black/10"
+                  )}
+                >
+                  Approval
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onModeChange("auto")}
+                  className={cn(
+                    "flex-1 rounded-xl px-2 py-1.5 text-xs font-semibold transition",
+                    userMode === "auto"
+                      ? "bg-white ring-1 ring-black/10 text-zinc-950"
+                      : "bg-black/5 text-zinc-600 hover:bg-black/10"
+                  )}
+                >
+                  Auto
+                </button>
+              </div>
+            ) : null}
+
+            {!connected && onConnectGmail ? (
+              <div className="mt-4">
+                <button
+                  type="button"
+                  onClick={onConnectGmail}
+                  className="flex w-full items-center justify-center gap-2 rounded-2xl px-3 py-2 text-xs font-semibold text-white transition hover:opacity-90"
+                  style={{ backgroundImage: `linear-gradient(90deg, ${BRAND.a}, ${BRAND.b})` }}
+                >
+                  <Mail className="h-4 w-4" />
+                  Connect Gmail
+                </button>
+              </div>
+            ) : null}
+
           </div>
 
           <nav className="mt-5 space-y-1">
@@ -453,51 +421,24 @@ function Sidebar({ active, onNavigate }: { active: string; onNavigate: (k: strin
 function TopBar({
   query,
   setQuery,
-  onCreate,
 }: {
   query: string;
   setQuery: (v: string) => void;
-  onCreate: () => void;
 }) {
   return (
     <div className="sticky top-0 z-30 border-b border-black/5 bg-white/70 backdrop-blur supports-[backdrop-filter]:bg-white/55">
       <div className="mx-auto w-full max-w-[1400px] px-4 py-4 sm:px-6">
         <div className="flex items-center justify-between gap-3">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="relative hidden w-[420px] max-w-[46vw] items-center gap-2 rounded-2xl bg-white/80 px-4 py-3 ring-1 ring-black/10 backdrop-blur md:flex">
-              <Search className="h-4 w-4 text-zinc-500" />
+          <div className="flex min-w-0 flex-1 items-center gap-3">
+            <div className="relative flex w-full max-w-md items-center gap-2 rounded-2xl bg-white/80 px-4 py-3 ring-1 ring-black/10 backdrop-blur">
+              <Search className="h-4 w-4 shrink-0 text-zinc-500" />
               <input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search cases, merchants, IDs…"
+                placeholder="Search inbox…"
                 className="w-full bg-transparent text-sm font-semibold text-zinc-900 outline-none placeholder:text-zinc-400"
               />
-              <span className={cn("rounded-xl bg-black/5 px-2 py-1 text-[11px] font-semibold text-zinc-600", GeistMono.className)}>
-                ⌘K
-              </span>
             </div>
-
-            <div className="md:hidden">
-              <Chip>
-                <Sparkles className="h-4 w-4" style={{ color: BRAND.b }} />
-                Dashboard
-              </Chip>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <IconButton label="Notifications">
-              <Bell className="h-4 w-4 text-zinc-700" />
-            </IconButton>
-            <IconButton label="Shortcuts">
-              <Sparkles className="h-4 w-4" style={{ color: BRAND.b }} />
-            </IconButton>
-            <PrimaryButton onClick={onCreate} className="hidden sm:inline-flex">
-              Create a case
-            </PrimaryButton>
-            <IconButton label="Create case" onClick={onCreate} className="sm:hidden">
-              <Plus className="h-4 w-4" style={{ color: BRAND.a }} />
-            </IconButton>
           </div>
         </div>
       </div>
@@ -506,867 +447,501 @@ function TopBar({
   );
 }
 
-function KpiCard({
-  title,
-  value,
-  hint,
-  trend,
-}: {
-  title: string;
-  value: string;
-  hint: string;
-  trend: { kind: "up" | "down" | "flat"; label: string };
-}) {
-  return (
-    <SoftCard className="p-5">
-      <div className="flex items-start justify-between">
-        <div>
-          <div className="text-xs font-semibold text-zinc-600">{title}</div>
-          <div className="mt-2 text-2xl font-semibold tracking-tight text-zinc-950 md:text-3xl">
-            {value}
-          </div>
-          <div className="mt-2 text-sm text-zinc-600">{hint}</div>
-        </div>
 
-        <span
-          className="inline-flex items-center gap-2 rounded-full bg-black/5 px-3 py-1 text-xs font-semibold text-zinc-700"
-          title={trend.label}
-        >
-          <span className="h-2 w-2 rounded-full" style={{ background: kpiTrendColor(trend.kind) }} />
-          {trend.label}
-        </span>
-      </div>
-
-      <div className="mt-5 h-1 overflow-hidden rounded-full bg-black/5">
-        <motion.div
-          className="h-full"
-          style={{ backgroundImage: `linear-gradient(90deg, ${BRAND.a}, ${BRAND.b}, ${BRAND.c})` }}
-          initial={{ width: "18%" }}
-          animate={{ width: ["18%", "56%", "34%", "72%", "48%", "86%"] }}
-          transition={{ duration: 10, ease, repeat: Infinity }}
-        />
-      </div>
-    </SoftCard>
-  );
-}
-
-function StatusPill({ status }: { status: CaseStatus }) {
-  const c = statusColor(status);
-  return (
-    <span className="inline-flex items-center gap-2 rounded-full bg-black/5 px-3 py-1 text-xs font-semibold text-zinc-700">
-      <span className="h-2 w-2 rounded-full" style={{ background: c }} />
-      {status}
-    </span>
-  );
-}
-
-function Confidence({ value }: { value: number }) {
-  const v = Math.max(0, Math.min(100, value));
-  return (
-    <div className="flex items-center gap-3">
-      <div className="h-2 w-24 overflow-hidden rounded-full bg-black/5">
-        <div
-          className="h-full"
-          style={{
-            width: `${v}%`,
-            backgroundImage: `linear-gradient(90deg, ${BRAND.a}, ${BRAND.b}, ${BRAND.c})`,
-          }}
-        />
-      </div>
-      <span className={cn("text-xs font-semibold text-zinc-600", GeistMono.className)}>{v}%</span>
-    </div>
-  );
-}
-
-function CasesTable({
-  items,
-  selectedId,
-  onSelect,
-}: {
-  items: CaseItem[];
-  selectedId?: string;
-  onSelect: (id: string) => void;
-}) {
-  return (
-    <GlassCard className="overflow-hidden">
-      <div className="flex items-center justify-between border-b border-black/5 px-6 py-5">
-        <div>
-          <div className="text-sm font-semibold text-zinc-950">Cases</div>
-          <div className="mt-1 text-xs text-zinc-600">Active workflows and resolved outcomes.</div>
-        </div>
-        <div className="flex items-center gap-2">
-          <SecondaryButton className="gap-2 px-4 py-2 text-xs">
-            <Filter className="h-4 w-4 text-zinc-700" />
-            Filters
-          </SecondaryButton>
-          <IconButton label="More">
-            <MoreHorizontal className="h-4 w-4 text-zinc-700" />
-          </IconButton>
-        </div>
-      </div>
-
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[920px]">
-          <thead>
-            <tr className="bg-white/60 text-left text-xs font-semibold text-zinc-600">
-              <th className="px-6 py-4">Case</th>
-              <th className="px-6 py-4">Merchant</th>
-              <th className="px-6 py-4">Status</th>
-              <th className="px-6 py-4">Mode</th>
-              <th className="px-6 py-4">Confidence</th>
-              <th className="px-6 py-4">Next action</th>
-              <th className="px-6 py-4">Updated</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((c) => {
-              const isActive = selectedId === c.id;
-              const mb = modeBadge(c.mode);
-              return (
-                <tr
-                  key={c.id}
-                  className={cn(
-                    "cursor-pointer border-t border-black/5 bg-white/70 transition hover:bg-white",
-                    isActive && "bg-white"
-                  )}
-                  onClick={() => onSelect(c.id)}
-                >
-                  <td className="px-6 py-4">
-                    <div className="flex items-center gap-3">
-                      <span
-                        className={cn(
-                          "inline-flex h-10 w-10 items-center justify-center rounded-2xl ring-1 ring-black/10",
-                          isActive ? "bg-white" : "bg-white/70"
-                        )}
-                        style={{
-                          backgroundImage: `linear-gradient(135deg, ${BRAND.a}12, ${BRAND.b}12, ${BRAND.c}12)`,
-                        }}
-                      >
-                        <Mail className="h-4 w-4" style={{ color: BRAND.a }} />
-                      </span>
-                      <div>
-                        <div className="text-sm font-semibold text-zinc-950">
-                          <Mono>{formatCaseId(c.id)}</Mono>
-                        </div>
-                        <div className="mt-0.5 text-xs text-zinc-600">{c.category}</div>
-                      </div>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className="text-sm font-semibold text-zinc-900">{c.merchant}</div>
-                    <div className="mt-0.5 text-xs text-zinc-600">{c.desired}</div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <StatusPill status={c.status} />
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className="inline-flex items-center gap-2 rounded-full bg-black/5 px-3 py-1 text-xs font-semibold text-zinc-700">
-                      <span className="h-2 w-2 rounded-full" style={{ background: mb.dot }} />
-                      {mb.label}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4">
-                    <Confidence value={c.confidence} />
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className="text-sm font-semibold text-zinc-900">{c.nextAction}</div>
-                    <div className="mt-0.5 text-xs text-zinc-600">Last: {c.lastAction}</div>
-                  </td>
-                  <td className="px-6 py-4">
-                    <div className={cn("text-sm font-semibold text-zinc-900", GeistMono.className)}>{c.updatedAt}</div>
-                    <div className="mt-0.5 text-xs text-zinc-600">Created {c.createdAt}</div>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="flex items-center justify-between border-t border-black/5 bg-white/70 px-6 py-4">
-        <div className="text-xs font-semibold text-zinc-600">Showing {items.length} cases</div>
-        <div className="flex items-center gap-2">
-          <IconButton label="Prev">
-            <ChevronLeft className="h-4 w-4 text-zinc-700" />
-          </IconButton>
-          <IconButton label="Next">
-            <ChevronRight className="h-4 w-4 text-zinc-700" />
-          </IconButton>
-        </div>
-      </div>
-    </GlassCard>
-  );
-}
-
-function TimelineItem({
-  icon,
-  title,
-  meta,
-  desc,
-  accent,
-  pulse,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  meta: string;
-  desc: string;
-  accent: string;
-  pulse?: boolean;
-}) {
-  return (
-    <div className="flex gap-3">
-      <div className="relative">
-        <div
-          className="grid h-10 w-10 place-items-center rounded-2xl ring-1 ring-black/10 bg-white"
-          style={{ boxShadow: "0 14px 50px rgba(0,0,0,.08)" }}
-        >
-          <span style={{ color: accent }}>{icon}</span>
-        </div>
-        {pulse ? (
-          <motion.div
-            aria-hidden
-            className="absolute inset-0 rounded-2xl"
-            style={{ boxShadow: `0 0 0 0 ${accent}44` }}
-            animate={{ boxShadow: [`0 0 0 0 ${accent}22`, `0 0 0 14px ${accent}00`] }}
-            transition={{ duration: 1.4, ease: "easeOut", repeat: Infinity }}
-          />
-        ) : null}
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-start justify-between gap-3">
-          <div className="text-sm font-semibold text-zinc-950">{title}</div>
-          <div className={cn("text-xs font-semibold text-zinc-500", GeistMono.className)}>{meta}</div>
-        </div>
-        <div className="mt-1 text-sm leading-relaxed text-zinc-600">{desc}</div>
-      </div>
-    </div>
-  );
-}
-
-function CaseDrawer({
-  open,
-  onClose,
-  item,
-}: {
-  open: boolean;
-  onClose: () => void;
-  item?: CaseItem;
-}) {
-  return (
-    <AnimatePresence>
-      {open ? (
-        <>
-          <motion.div
-            className="fixed inset-0 z-40 bg-black/20"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={onClose}
-          />
-          <motion.div
-            className="fixed right-0 top-0 z-50 h-full w-full max-w-[560px] overflow-hidden bg-white"
-            initial={{ x: 560 }}
-            animate={{ x: 0 }}
-            exit={{ x: 560 }}
-            transition={{ duration: 0.45, ease }}
-          >
-            <div className="relative h-full">
-              <Glow className="-top-28 right-[-160px] h-[420px] w-[420px] opacity-45" />
-              <Glow className="bottom-[-200px] left-[-200px] h-[520px] w-[520px] opacity-40" />
-              <Noise />
-
-              <div className="relative flex h-full flex-col">
-                <div className="border-b border-black/5 bg-white/70 px-6 py-5 backdrop-blur">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-3">
-                        <span
-                          className="inline-flex h-11 w-11 items-center justify-center rounded-2xl ring-1 ring-black/10"
-                          style={{
-                            backgroundImage: `linear-gradient(135deg, ${BRAND.a}12, ${BRAND.b}12, ${BRAND.c}12)`,
-                          }}
-                        >
-                          <Mail className="h-4 w-4" style={{ color: BRAND.a }} />
-                        </span>
-                        <div>
-                          <div className="text-sm font-semibold text-zinc-950">
-                            Case <Mono>{item ? formatCaseId(item.id) : "—"}</Mono>
-                          </div>
-                          <div className="mt-0.5 text-xs text-zinc-600">
-                            {item ? `${item.merchant} • ${item.category}` : ""}
-                          </div>
-                        </div>
-                      </div>
-                      <div className="mt-4 flex flex-wrap items-center gap-2">
-                        {item ? <StatusPill status={item.status} /> : null}
-                        {item ? (
-                          <Chip>
-                            <PillDot color={modeBadge(item.mode).dot} />
-                            {item.mode}
-                          </Chip>
-                        ) : null}
-                        <Chip>
-                          <Lock className="h-4 w-4" style={{ color: BRAND.a }} />
-                          From your inbox
-                        </Chip>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <IconButton label="Copy case ID">
-                        <Copy className="h-4 w-4 text-zinc-700" />
-                      </IconButton>
-                      <IconButton label="Close" onClick={onClose}>
-                        <X className="h-4 w-4 text-zinc-700" />
-                      </IconButton>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex-1 overflow-auto px-6 py-6">
-                  <div className="grid gap-4">
-                    <GlassCard className="overflow-hidden">
-                      <div className="border-b border-black/5 px-5 py-4">
-                        <div className="flex items-center justify-between">
-                          <div className="text-sm font-semibold text-zinc-950">Next action</div>
-                          <span className={cn("text-xs font-semibold text-zinc-500", GeistMono.className)}>
-                            {item?.updatedAt ?? ""}
-                          </span>
-                        </div>
-                        <div className="mt-2 text-sm text-zinc-600">
-                          {item?.nextAction ?? ""}
-                        </div>
-                      </div>
-                      <div className="p-5">
-                        <div className="grid gap-3 sm:grid-cols-2">
-                          <div className="rounded-3xl bg-white/70 p-4 ring-1 ring-black/10">
-                            <div className="text-xs font-semibold text-zinc-600">Confidence</div>
-                            <div className="mt-2">
-                              <Confidence value={item?.confidence ?? 0} />
-                            </div>
-                          </div>
-                          <div className="rounded-3xl bg-white/70 p-4 ring-1 ring-black/10">
-                            <div className="text-xs font-semibold text-zinc-600">Latest offer</div>
-                            <div className="mt-2 text-sm font-semibold text-zinc-950">
-                              {item?.offer ?? "No offer detected"}
-                            </div>
-                            <div className="mt-1 text-xs text-zinc-600">Concessions tracked automatically.</div>
-                          </div>
-                        </div>
-
-                        <div className="mt-4 grid gap-2">
-                          <PrimaryButton className="w-full">
-                            Approve & send
-                          </PrimaryButton>
-                          <div className="grid grid-cols-2 gap-2">
-                            <SecondaryButton className="w-full gap-2">
-                              <Pencil className="h-4 w-4" />
-                              Edit draft
-                            </SecondaryButton>
-                            <SecondaryButton className="w-full gap-2">
-                              <ExternalLink className="h-4 w-4" />
-                              Open thread
-                            </SecondaryButton>
-                          </div>
-                        </div>
-                      </div>
-                    </GlassCard>
-
-                    <GlassCard className="overflow-hidden">
-                      <div className="border-b border-black/5 px-5 py-4">
-                        <div className="flex items-center justify-between">
-                          <div className="text-sm font-semibold text-zinc-950">Activity</div>
-                          <Chip>
-                            <Calendar className="h-4 w-4" style={{ color: BRAND.b }} />
-                            Timeline
-                          </Chip>
-                        </div>
-                        <div className="mt-2 text-sm text-zinc-600">
-                          Every email action is visible and audit-friendly.
-                        </div>
-                      </div>
-                      <div className="p-5 space-y-4">
-                        <TimelineItem
-                          icon={<Mail className="h-4 w-4" />}
-                          title="Initial email sent"
-                          meta="09:12"
-                          desc="Refund request + evidence attached."
-                          accent={BRAND.b}
-                        />
-                        <TimelineItem
-                          icon={<MessageSquare className="h-4 w-4" />}
-                          title="Merchant replied"
-                          meta="11:03"
-                          desc="Partial refund offered (15%)."
-                          accent={BRAND.a}
-                        />
-                        <TimelineItem
-                          icon={<Wand2 className="h-4 w-4" />}
-                          title="Counter drafted"
-                          meta="11:05"
-                          desc="Firm, polite, evidence-based request for full refund."
-                          accent={BRAND.c}
-                          pulse
-                        />
-                        <TimelineItem
-                          icon={<Clock className="h-4 w-4" />}
-                          title="Follow-up scheduled"
-                          meta="+24h"
-                          desc="If no response, the agent follows up and escalates." 
-                          accent={BRAND.b}
-                        />
-                      </div>
-                    </GlassCard>
-
-                    <GlassCard className="overflow-hidden">
-                      <div className="border-b border-black/5 px-5 py-4">
-                        <div className="flex items-center justify-between">
-                          <div className="text-sm font-semibold text-zinc-950">Draft preview</div>
-                          <span className="rounded-full bg-black/5 px-3 py-1 text-xs font-semibold text-zinc-700">
-                            Approval
-                          </span>
-                        </div>
-                        <div className="mt-2 text-sm text-zinc-600">
-                          What will be sent from your inbox.
-                        </div>
-                      </div>
-                      <div className="p-5">
-                        <div className="rounded-3xl bg-white/70 p-4 ring-1 ring-black/10">
-                          <div className="flex items-center justify-between">
-                            <div className="text-xs font-semibold text-zinc-600">Subject</div>
-                            <span className={cn("text-[11px] font-semibold text-zinc-500", GeistMono.className)}>
-                              auto-resolve
-                            </span>
-                          </div>
-                          <div className="mt-2 text-sm font-semibold text-zinc-950">
-                            Request for full refund — Order <Mono>#18472</Mono>
-                          </div>
-                          <div className="mt-4 space-y-2 text-sm text-zinc-700">
-                            <p>Hi Support Team,</p>
-                            <p>
-                              I’m following up regarding Order <Mono>#18472</Mono>. The item arrived damaged and I’m requesting a full refund to the original payment method.
-                            </p>
-                            <p>
-                              I’ve attached photos and order details. Please escalate to a supervisor if needed.
-                            </p>
-                            <p>Thanks,</p>
-                            <p>You</p>
-                          </div>
-                        </div>
-                        <div className="mt-3 grid grid-cols-3 gap-2">
-                          <SecondaryButton className="gap-2 px-0 py-2 text-xs">
-                            <Star className="h-4 w-4" />
-                            Save
-                          </SecondaryButton>
-                          <SecondaryButton className="gap-2 px-0 py-2 text-xs">
-                            <Link2 className="h-4 w-4" />
-                            Attach
-                          </SecondaryButton>
-                          <SecondaryButton className="gap-2 px-0 py-2 text-xs">
-                            <Trash2 className="h-4 w-4" />
-                            Discard
-                          </SecondaryButton>
-                        </div>
-                      </div>
-                    </GlassCard>
-                  </div>
-                </div>
-
-                <div className="border-t border-black/5 bg-white/70 px-6 py-4 backdrop-blur">
-                  <div className="flex items-center justify-between">
-                    <div className="text-xs font-semibold text-zinc-600">Actions</div>
-                    <div className="flex items-center gap-2">
-                      <SecondaryButton className="gap-2 px-4 py-2 text-xs">
-                        <Bot className="h-4 w-4" style={{ color: BRAND.a }} />
-                        Switch mode
-                      </SecondaryButton>
-                      <SecondaryButton className="gap-2 px-4 py-2 text-xs">
-                        <Shield className="h-4 w-4" style={{ color: BRAND.b }} />
-                        Guardrails
-                      </SecondaryButton>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </motion.div>
-        </>
-      ) : null}
-    </AnimatePresence>
-  );
-}
-
-function CreateCaseModal({
-  open,
-  onClose,
-}: {
-  open: boolean;
-  onClose: () => void;
-}) {
-  return (
-    <AnimatePresence>
-      {open ? (
-        <>
-          <motion.div
-            className="fixed inset-0 z-40 bg-black/25"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={onClose}
-          />
-          <motion.div
-            className="fixed left-1/2 top-1/2 z-50 w-[min(720px,92vw)] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-[28px] bg-white ring-1 ring-black/10"
-            initial={{ opacity: 0, y: 20, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: 20, scale: 0.98 }}
-            transition={{ duration: 0.35, ease }}
-          >
-            <div className="relative">
-              <Glow className="-top-28 left-[-180px] h-[420px] w-[420px] opacity-45" />
-              <Glow className="-bottom-32 right-[-220px] h-[520px] w-[520px] opacity-40" />
-              <Noise />
-
-              <div className="relative border-b border-black/5 bg-white/70 px-6 py-5 backdrop-blur">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <div className="text-sm font-semibold text-zinc-950">Create a case</div>
-                    <div className="mt-1 text-xs text-zinc-600">
-                      Provide the details once. The agent handles the email loop.
-                    </div>
-                  </div>
-                  <IconButton label="Close" onClick={onClose}>
-                    <X className="h-4 w-4 text-zinc-700" />
-                  </IconButton>
-                </div>
-              </div>
-
-              <div className="relative p-6">
-                <div className="grid gap-4 md:grid-cols-2">
-                  <Field label="Merchant" placeholder="ACME Store" icon={<Inbox className="h-4 w-4" />} />
-                  <Field label="Order / reference" placeholder="#18472" icon={<CircleDot className="h-4 w-4" />} mono />
-                  <Field label="Issue" placeholder="Item arrived damaged" icon={<MessageSquare className="h-4 w-4" />} className="md:col-span-2" />
-                  <Field label="Desired outcome" placeholder="Full refund" icon={<CheckCircle2 className="h-4 w-4" />} className="md:col-span-2" />
-                </div>
-
-                <div className="mt-5 grid gap-3 md:grid-cols-12">
-                  <SoftCard className="md:col-span-7 p-5">
-                    <div className="flex items-center justify-between">
-                      <div className="text-sm font-semibold text-zinc-950">Mode</div>
-                      <Chip>
-                        <PillDot color={BRAND.a} />
-                        Approval
-                      </Chip>
-                    </div>
-                    <div className="mt-3 text-sm text-zinc-600">
-                      Review drafts before sending. Switch to Auto per case anytime.
-                    </div>
-                    <div className="mt-4 grid grid-cols-2 gap-2">
-                      <ModeChip active label="Approval" desc="Review before send" />
-                      <ModeChip label="Auto" desc="Hands-off" />
-                    </div>
-                  </SoftCard>
-                  <SoftCard className="md:col-span-5 p-5">
-                    <div className="flex items-center justify-between">
-                      <div className="text-sm font-semibold text-zinc-950">Attachments</div>
-                      <SecondaryButton className="gap-2 px-4 py-2 text-xs">
-                        <Link2 className="h-4 w-4" />
-                        Add
-                      </SecondaryButton>
-                    </div>
-                    <div className="mt-3 rounded-3xl bg-zinc-50 p-4 ring-1 ring-black/10">
-                      <div className="flex items-center gap-3">
-                        <span
-                          className="inline-flex h-10 w-10 items-center justify-center rounded-2xl ring-1 ring-black/10 bg-white"
-                          style={{ backgroundImage: `linear-gradient(135deg, ${BRAND.a}10, ${BRAND.b}10)` }}
-                        >
-                          <Download className="h-4 w-4" style={{ color: BRAND.a }} />
-                        </span>
-                        <div>
-                          <div className="text-sm font-semibold text-zinc-950">damage_photos.zip</div>
-                          <div className="text-xs text-zinc-600">3 images</div>
-                        </div>
-                      </div>
-                    </div>
-                  </SoftCard>
-                </div>
-
-                <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="text-xs font-semibold text-zinc-600">
-                    <span className="inline-flex items-center gap-2">
-                      <Lock className="h-4 w-4" style={{ color: BRAND.a }} />
-                      Sends from your inbox • Approval by default
-                    </span>
-                  </div>
-                  <div className="flex gap-2">
-                    <SecondaryButton onClick={onClose}>Cancel</SecondaryButton>
-                    <PrimaryButton>
-                      Create case
-                    </PrimaryButton>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </motion.div>
-        </>
-      ) : null}
-    </AnimatePresence>
-  );
-}
-
-function Field({
-  label,
-  placeholder,
-  icon,
-  className,
-  mono,
-}: {
-  label: string;
-  placeholder: string;
-  icon: React.ReactNode;
-  className?: string;
-  mono?: boolean;
-}) {
-  return (
-    <div className={cn("rounded-3xl bg-white/80 p-4 ring-1 ring-black/10", className)}>
-      <div className="flex items-center justify-between">
-        <div className="text-xs font-semibold text-zinc-600">{label}</div>
-        <span className="inline-flex h-9 w-9 items-center justify-center rounded-2xl ring-1 ring-black/10 bg-white">
-          <span style={{ color: BRAND.b }}>{icon}</span>
-        </span>
-      </div>
-      <input
-        placeholder={placeholder}
-        className={cn(
-          "mt-3 w-full bg-transparent text-sm font-semibold text-zinc-950 outline-none placeholder:text-zinc-400",
-          mono && GeistMono.className
-        )}
-      />
-    </div>
-  );
-}
-
-function ModeChip({ active, label, desc }: { active?: boolean; label: string; desc: string }) {
-  return (
-    <div
-      className={cn(
-        "rounded-3xl p-4 ring-1",
-        active
-          ? "bg-white ring-black/15 shadow-[0_14px_50px_rgba(0,0,0,.10)]"
-          : "bg-white/60 ring-black/10"
-      )}
-    >
-      <div className="flex items-center justify-between">
-        <div className="text-sm font-semibold text-zinc-950">{label}</div>
-        {active ? (
-          <span className="rounded-full bg-black/5 px-3 py-1 text-xs font-semibold text-zinc-700">Selected</span>
-        ) : null}
-      </div>
-      <div className="mt-2 text-xs text-zinc-600">{desc}</div>
-      {active ? (
-        <div className="mt-3 h-1 overflow-hidden rounded-full bg-black/5">
-          <div
-            className="h-full"
-            style={{ width: "62%", backgroundImage: `linear-gradient(90deg, ${BRAND.a}, ${BRAND.b}, ${BRAND.c})` }}
-          />
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function RightRail() {
-  return (
-    <div className="hidden w-[360px] shrink-0 xl:block">
-      <div className="sticky top-[84px] space-y-4">
-        <GlassCard className="overflow-hidden">
-          <div className="border-b border-black/5 px-5 py-4">
-            <div className="flex items-center justify-between">
-              <div className="text-sm font-semibold text-zinc-950">Agent health</div>
-              <Chip>
-                <PillDot color={"#22C55E"} />
-                Stable
-              </Chip>
-            </div>
-            <div className="mt-2 text-sm text-zinc-600">Guardrails active. Tone stays professional.</div>
-          </div>
-          <div className="p-5 space-y-3">
-            <MiniRow icon={<Gauge className="h-4 w-4" />} title="Strategy" value="Firm, evidence-based" />
-            <MiniRow icon={<Clock className="h-4 w-4" />} title="Follow-ups" value="24h cadence" />
-            <MiniRow icon={<Shield className="h-4 w-4" />} title="Policy" value="Respectful escalation" />
-            <div className="mt-2 rounded-3xl bg-white/70 p-4 ring-1 ring-black/10">
-              <div className="text-xs font-semibold text-zinc-600">Automation</div>
-              <div className="mt-2 flex items-center justify-between">
-                <div className="text-sm font-semibold text-zinc-950">Approval default</div>
-                <span className="rounded-full bg-black/5 px-3 py-1 text-xs font-semibold text-zinc-700">On</span>
-              </div>
-              <div className="mt-3 h-2 overflow-hidden rounded-full bg-black/5">
-                <motion.div
-                  className="h-full"
-                  style={{ backgroundImage: `linear-gradient(90deg, ${BRAND.a}, ${BRAND.b}, ${BRAND.c})` }}
-                  initial={{ width: "0%" }}
-                  animate={{ width: ["0%", "62%", "48%", "86%"] }}
-                  transition={{ duration: 7.5, ease, repeat: Infinity }}
-                />
-              </div>
-            </div>
-          </div>
-        </GlassCard>
-
-        <GlassCard className="overflow-hidden">
-          <div className="border-b border-black/5 px-5 py-4">
-            <div className="text-sm font-semibold text-zinc-950">Shortcuts</div>
-            <div className="mt-2 text-sm text-zinc-600">Fast actions for daily ops.</div>
-          </div>
-          <div className="p-5 grid gap-2">
-            <Shortcut icon={<Plus className="h-4 w-4" />} label="New case" />
-            <Shortcut icon={<Mail className="h-4 w-4" />} label="Open inbox" />
-            <Shortcut icon={<Bot className="h-4 w-4" />} label="Automation rules" />
-            <Shortcut icon={<Settings className="h-4 w-4" />} label="Settings" />
-          </div>
-        </GlassCard>
-      </div>
-    </div>
-  );
-}
-
-function MiniRow({ icon, title, value }: { icon: React.ReactNode; title: string; value: string }) {
-  return (
-    <div className="flex items-center justify-between rounded-3xl bg-white/70 px-4 py-3 ring-1 ring-black/10">
-      <div className="flex items-center gap-3">
-        <span className="inline-flex h-9 w-9 items-center justify-center rounded-2xl ring-1 ring-black/10 bg-white">
-          <span style={{ color: BRAND.a }}>{icon}</span>
-        </span>
-        <div>
-          <div className="text-xs font-semibold text-zinc-600">{title}</div>
-          <div className="text-sm font-semibold text-zinc-950">{value}</div>
-        </div>
-      </div>
-      <ChevronRight className="h-4 w-4 text-zinc-400" />
-    </div>
-  );
-}
-
-function Shortcut({ icon, label }: { icon: React.ReactNode; label: string }) {
-  return (
-    <button
-      type="button"
-      className="flex items-center justify-between rounded-3xl bg-white/70 px-4 py-3 ring-1 ring-black/10 transition hover:bg-white"
-    >
-      <span className="inline-flex items-center gap-3">
-        <span className="inline-flex h-9 w-9 items-center justify-center rounded-2xl ring-1 ring-black/10 bg-white">
-          <span style={{ color: BRAND.b }}>{icon}</span>
-        </span>
-        <span className="text-sm font-semibold text-zinc-950">{label}</span>
-      </span>
-      <ExternalLink className="h-4 w-4 text-zinc-400" />
-    </button>
-  );
-}
-
-function EmptyState() {
-  return (
-    <GlassCard className="p-10">
-      <div className="mx-auto max-w-lg text-center">
-        <div
-          className="mx-auto grid h-14 w-14 place-items-center rounded-3xl ring-1 ring-black/10"
-          style={{ backgroundImage: `linear-gradient(135deg, ${BRAND.a}14, ${BRAND.b}14, ${BRAND.c}14)` }}
-        >
-          <Bot className="h-6 w-6" style={{ color: BRAND.a }} />
-        </div>
-        <div className="mt-5 text-2xl font-semibold tracking-tight text-zinc-950">No cases yet</div>
-        <div className="mt-2 text-sm leading-relaxed text-zinc-600">
-          Create your first case. The agent will draft, send, follow up, and escalate until resolution.
-        </div>
-        <div className="mt-6 flex justify-center gap-2">
-          <PrimaryButton>Create a case</PrimaryButton>
-          <SecondaryButton className="gap-2">
-            <Sparkles className="h-4 w-4" style={{ color: BRAND.b }} />
-            View demo
-          </SecondaryButton>
-        </div>
-      </div>
-    </GlassCard>
-  );
-}
+const USER_ID_KEY = "autoresolve_user_id";
+const SEEN_SENT_THREADS_KEY_PREFIX = "autoresolve_seen_sent_";
+const AGGRESSIVE_POLLING_KEY = "autoresolve_aggressive_polling";
+const POLL_AGGRESSIVE_MS = 5000;
+const POLL_NORMAL_MS = 30000;
+const AUTO_SEND_COUNTDOWN_SEC = 10;
 
 export default function DashboardPage() {
-  const [active, setActive] = useState("overview");
+  const searchParams = useSearchParams();
+  const [active, setActive] = useState("inbox");
   const [query, setQuery] = useState("");
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [createOpen, setCreateOpen] = useState(false);
-  const [selected, setSelected] = useState<string | undefined>("18472");
+  const [userId, setUserId] = useState<string | null>(null);
+  const [connected, setConnected] = useState(false);
+  const [apiThreads, setApiThreads] = useState<Array<{ id: string; threadId: string; subject: string | null; status: string | null }>>([]);
+  const [apiReplies, setApiReplies] = useState<Array<{ id: string; generatedContent: string; status: string; confidenceScore: number | null }>>([]);
+  const [userMode, setUserModeState] = useState<"auto" | "approval">("approval");
+  const [errorBanner, setErrorBanner] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
+  const [visibleThreadCount, setVisibleThreadCount] = useState(10);
+  const [syncModalOpen, setSyncModalOpen] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<"idle" | "syncing" | "success" | "error">("idle");
+  const [syncMessage, setSyncMessage] = useState("");
 
-  const cases: CaseItem[] = useMemo(
-    () => [
-      {
-        id: "18472",
-        merchant: "ACME Store",
-        category: "Refund • Damaged delivery",
-        createdAt: "Feb 03",
-        updatedAt: "11:05",
-        status: "Needs approval",
-        mode: "Approval",
-        desired: "Full refund",
-        lastAction: "Offer detected: 15%",
-        nextAction: "Approve counter email",
-        offer: "15% partial refund",
-        confidence: 86,
-      },
-      {
-        id: "22910",
-        merchant: "Streamify",
-        category: "Subscription • Cancellation",
-        createdAt: "Jan 28",
-        updatedAt: "09:41",
-        status: "Awaiting reply",
-        mode: "Auto",
-        desired: "Cancel + prorated refund",
-        lastAction: "Follow-up sent",
-        nextAction: "Escalate if no response",
-        offer: "No offer",
-        confidence: 72,
-      },
-      {
-        id: "31107",
-        merchant: "FlyFast",
-        category: "Billing • Charge correction",
-        createdAt: "Jan 20",
-        updatedAt: "Yesterday",
-        status: "Running",
-        mode: "Approval",
-        desired: "Charge reversal",
-        lastAction: "Evidence requested",
-        nextAction: "Attach statement",
-        offer: "Credit voucher offered",
-        confidence: 61,
-      },
-      {
-        id: "09744",
-        merchant: "ShopNova",
-        category: "Refund • Late delivery",
-        createdAt: "Jan 14",
-        updatedAt: "Jan 16",
-        status: "Resolved",
-        mode: "Auto",
-        desired: "Full refund",
-        lastAction: "Refund confirmed",
-        nextAction: "Close case",
-        offer: "Full refund approved",
-        confidence: 94,
-      },
-    ],
-    []
-  );
+  const [replyModalOpen, setReplyModalOpen] = useState(false);
+  const [replyModalThreadId, setReplyModalThreadId] = useState<string | null>(null);
+  const [replyModalPhase, setReplyModalPhase] = useState<"generating" | "sent" | "draft" | "takeover" | "sending" | "error">("generating");
+  const [replyModalDraft, setReplyModalDraft] = useState("");
+  const [replyModalReplyId, setReplyModalReplyId] = useState("");
+  const [replyModalSubject, setReplyModalSubject] = useState<string | null>(null);
+  const [replyModalEditedContent, setReplyModalEditedContent] = useState("");
+  const [replyModalError, setReplyModalError] = useState<string | null>(null);
+  const replyAbortRef = useRef<AbortController | null>(null);
+  const previousThreadIdsRef = useRef<Set<string>>(new Set());
+  const seenRepliedThreadIdsRef = useRef<Set<string>>(new Set());
+  const [seenRepliedThreadIds, setSeenRepliedThreadIds] = useState<Set<string>>(new Set());
 
-  const filtered = useMemo(() => {
+  const [aggressivePolling, setAggressivePolling] = useState(false);
+  const [replyCountdownSec, setReplyCountdownSec] = useState<number | null>(null);
+  const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const [guardrailsTrigger, setGuardrailsTrigger] = useState("");
+  const [guardrailsReply, setGuardrailsReply] = useState("");
+  const [guardrailsSaving, setGuardrailsSaving] = useState(false);
+  const [guardrailsLoaded, setGuardrailsLoaded] = useState(false);
+
+  useEffect(() => {
+    const uid = searchParams.get("userId");
+    const conn = searchParams.get("connected") === "1";
+    const err = searchParams.get("error");
+    if (uid) {
+      setUserId(uid);
+      try {
+        localStorage.setItem(USER_ID_KEY, uid);
+      } catch {
+        //
+      }
+      if (conn) setConnected(true);
+    } else {
+      try {
+        const stored = localStorage.getItem(USER_ID_KEY);
+        if (stored) setUserId(stored);
+      } catch {
+        //
+      }
+    }
+    const hint = searchParams.get("hint");
+    if (err === "google_not_configured") setErrorBanner("Backend Google OAuth not configured. Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to backend/.env");
+    else if (err === "database_unreachable") {
+      setErrorBanner(
+        "Database unreachable (ENOTFOUND). Use the connection pooler URL: Supabase Dashboard → Project Settings → Database → Connection string → URI → copy the Session or Transaction pooler URI (host aws-0-REGION.pooler.supabase.com). Set that as DATABASE_URL in backend/.env. Or try another network (e.g. phone hotspot)."
+      );
+    } else if (err === "oauth_failed") {
+      setErrorBanner(
+        hint === "redirect_uri_mismatch"
+          ? "Gmail connection failed: redirect URI mismatch. In backend/.env set GOOGLE_REDIRECT_URI to exactly what’s in Google Cloud Console → Credentials → your OAuth client → Authorized redirect URIs (e.g. http://localhost:3001/api/auth/gmail/callback)."
+          : "Gmail connection failed. Try again. Check the backend terminal for the error."
+      );
+    } else if (err === "missing_code") setErrorBanner("OAuth callback missing code. Try connecting again.");
+  }, [searchParams]);
+
+  useEffect(() => {
+    if (!userId) return;
+    getAuthStatus(userId)
+      .then((r) => setConnected(r.connected))
+      .catch(() => setConnected(false));
+    getUserMode(userId)
+      .then((r) => setUserModeState(r.mode))
+      .catch(() => {});
+  }, [userId]);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(AGGRESSIVE_POLLING_KEY);
+      setAggressivePolling(raw === "1");
+    } catch {
+      //
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!userId) return;
+    try {
+      const raw = localStorage.getItem(SEEN_SENT_THREADS_KEY_PREFIX + userId);
+      if (raw) {
+        const arr = JSON.parse(raw) as string[];
+        if (Array.isArray(arr)) {
+          const set = new Set(arr);
+          seenRepliedThreadIdsRef.current = set;
+          setSeenRepliedThreadIds(set);
+        }
+      }
+    } catch {
+      //
+    }
+  }, [userId]);
+
+  const markThreadSentSeen = (threadId: string) => {
+    setSeenRepliedThreadIds((prev) => {
+      const next = new Set(prev).add(threadId);
+      seenRepliedThreadIdsRef.current = next;
+      try {
+        if (userId) localStorage.setItem(SEEN_SENT_THREADS_KEY_PREFIX + userId, JSON.stringify([...next]));
+      } catch {
+        //
+      }
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    if (!userId || !connected) return;
+    const pollMs = aggressivePolling ? POLL_AGGRESSIVE_MS : POLL_NORMAL_MS;
+    const fetchData = () => {
+      const doFetch = () => {
+        if (aggressivePolling) {
+          syncEmails(userId!).catch(() => {}).finally(() => {
+            getThreads(userId!)
+              .then((r) => {
+                const threads = r.threads;
+                const prevIds = previousThreadIdsRef.current;
+                const newThreads = threads.filter((t) => !prevIds.has(t.threadId));
+                previousThreadIdsRef.current = new Set(threads.map((t) => t.threadId));
+                setApiThreads(threads);
+                const replied = threads.filter((t) => t.status === "replied");
+                const seen = seenRepliedThreadIdsRef.current;
+                const newReplied = replied.find((t) => !seen.has(t.threadId));
+                if (newReplied) {
+                  markThreadSentSeen(newReplied.threadId);
+                  setTimeout(() => openReplyModalWithSent(newReplied.threadId, newReplied.subject ?? null), 150);
+                } else if (newThreads.length > 0) {
+                  const pending = newThreads.find((t) => t.status === "pending" || t.status === "processing");
+                  const toOpen = pending ?? newThreads[0];
+                  setTimeout(() => openReplyModalForNewEmail(toOpen.threadId), 150);
+                }
+              })
+              .catch(() => {});
+            getReplies(userId!).then((r) => setApiReplies(r.replies)).catch(() => {});
+          });
+        } else {
+          getThreads(userId!)
+            .then((r) => {
+              const threads = r.threads;
+              const seen = seenRepliedThreadIdsRef.current;
+              previousThreadIdsRef.current = new Set(threads.map((t) => t.threadId));
+              setApiThreads(threads);
+              const newReplied = threads.find((t) => t.status === "replied" && !seen.has(t.threadId));
+              if (newReplied) {
+                markThreadSentSeen(newReplied.threadId);
+                setTimeout(() => openReplyModalWithSent(newReplied.threadId, newReplied.subject ?? null), 150);
+              }
+            })
+            .catch(() => {});
+          getReplies(userId!).then((r) => setApiReplies(r.replies)).catch(() => {});
+        }
+      };
+      doFetch();
+    };
+    fetchData();
+    const t = setInterval(fetchData, pollMs);
+    return () => clearInterval(t);
+  }, [userId, connected, aggressivePolling]);
+
+  useEffect(() => {
+    if (replyCountdownSec == null || replyCountdownSec <= 0 || countdownIntervalRef.current) return;
+    countdownIntervalRef.current = setInterval(() => {
+      setReplyCountdownSec((s) => {
+        if (s == null || s <= 0) return null;
+        if (s <= 1) {
+          if (countdownIntervalRef.current) {
+            clearInterval(countdownIntervalRef.current);
+            countdownIntervalRef.current = null;
+          }
+          return 0;
+        }
+        return s - 1;
+      });
+    }, 1000);
+    return () => {};
+  }, [replyCountdownSec]);
+
+  useEffect(() => {
+    if (replyCountdownSec === 0 && replyModalPhase === "draft" && userMode === "auto" && userId && replyModalReplyId) {
+      setReplyModalPhase("sending");
+      setReplyCountdownSec(null);
+      approveReply(userId, replyModalReplyId)
+        .then(() => {
+          setReplyModalPhase("sent");
+          markThreadSentSeen(replyModalThreadId!);
+          getReplies(userId!).then((r) => setApiReplies(r.replies)).catch(() => {});
+        })
+        .catch((e) => {
+          setReplyModalPhase("draft");
+          setReplyModalError(e instanceof Error ? e.message : String(e));
+        });
+    }
+  }, [replyCountdownSec, replyModalPhase, userMode, userId, replyModalReplyId, replyModalThreadId]);
+
+  useEffect(() => {
+    if (active === "guardrails" && userId && !guardrailsLoaded) {
+      getGuardrails(userId)
+        .then((r) => {
+          setGuardrailsTrigger(r.triggerDescription ?? "");
+          setGuardrailsReply(r.replyInstructions ?? "");
+          setGuardrailsLoaded(true);
+        })
+        .catch(() => setGuardrailsLoaded(true));
+    }
+  }, [active, userId, guardrailsLoaded]);
+
+  const handleConnectGmail = () => {
+    const url = getGmailAuthUrl(userId ?? undefined);
+    window.location.href = url;
+  };
+
+  const handleSyncInbox = async () => {
+    if (!userId) return;
+    setSyncing(true);
+    setErrorBanner(null);
+    setSyncModalOpen(true);
+    setSyncStatus("syncing");
+    setSyncMessage("Syncing inbox… pulling emails from Gmail.");
+    try {
+      const result = await syncEmails(userId);
+      let { threads } = await getThreads(userId);
+      setApiThreads(threads);
+      setVisibleThreadCount(10);
+      const { replies } = await getReplies(userId);
+      setApiReplies(replies);
+      // Worker processes messages in background; refetch after a short delay so threads can appear
+      if (threads.length === 0) {
+        setSyncMessage("Sync complete. Processing emails…");
+        await new Promise((r) => setTimeout(r, 3000));
+        const refetch = await getThreads(userId);
+        threads = refetch.threads;
+        setApiThreads(threads);
+      }
+      setSyncStatus("success");
+      setSyncMessage(result?.message ?? `Sync complete. ${threads.length} thread${threads.length === 1 ? "" : "s"} loaded.`);
+    } catch (e) {
+      console.error(e);
+      const msg = e instanceof Error ? e.message : "Sync failed.";
+      setSyncStatus("error");
+      setSyncMessage(msg);
+      setErrorBanner(msg);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const openReplyModalWithSent = (threadId: string, subject: string | null) => {
+    setReplyModalOpen(true);
+    setReplyModalThreadId(threadId);
+    setReplyModalPhase("sent");
+    setReplyModalSubject(subject);
+    setReplyModalError(null);
+    setReplyModalDraft("");
+    setReplyModalReplyId("");
+    setReplyModalEditedContent("");
+    setReplyCountdownSec(null);
+    markThreadSentSeen(threadId);
+  };
+
+  const openReplyModalForNewEmail = (threadId: string) => {
+    if (!userId) return;
+    if (countdownIntervalRef.current) {
+      clearInterval(countdownIntervalRef.current);
+      countdownIntervalRef.current = null;
+    }
+    replyAbortRef.current?.abort();
+    replyAbortRef.current = new AbortController();
+    const signal = replyAbortRef.current.signal;
+    setReplyModalOpen(true);
+    setReplyModalThreadId(threadId);
+    setReplyModalPhase("generating");
+    setReplyModalError(null);
+    setReplyModalDraft("");
+    setReplyModalReplyId("");
+    setReplyModalSubject(null);
+    setReplyModalEditedContent("");
+    setReplyCountdownSec(AUTO_SEND_COUNTDOWN_SEC);
+    generateReplyForThread(userId, threadId, { signal })
+      .then((result) => {
+        if (result.sent) {
+          setReplyModalPhase("sent");
+          setReplyCountdownSec(null);
+          if (countdownIntervalRef.current) {
+            clearInterval(countdownIntervalRef.current);
+            countdownIntervalRef.current = null;
+          }
+          markThreadSentSeen(threadId);
+        } else {
+          setReplyModalPhase("draft");
+          setReplyModalDraft(result.draft);
+          setReplyModalReplyId(result.replyId);
+          setReplyModalSubject(result.subject);
+        }
+      })
+      .catch((e) => {
+        if ((e as { name?: string }).name === "AbortError") return;
+        setReplyModalPhase("error");
+        setReplyModalError(e instanceof Error ? e.message : String(e));
+        setReplyCountdownSec(null);
+      });
+  };
+
+  const openReplyModal = (threadId: string) => {
+    if (!userId) return;
+    if (countdownIntervalRef.current) {
+      clearInterval(countdownIntervalRef.current);
+      countdownIntervalRef.current = null;
+    }
+    replyAbortRef.current?.abort();
+    replyAbortRef.current = new AbortController();
+    const signal = replyAbortRef.current.signal;
+    setReplyModalOpen(true);
+    setReplyModalThreadId(threadId);
+    setReplyModalPhase("generating");
+    setReplyModalError(null);
+    setReplyModalDraft("");
+    setReplyModalReplyId("");
+    setReplyModalSubject(null);
+    setReplyModalEditedContent("");
+    setReplyCountdownSec(AUTO_SEND_COUNTDOWN_SEC);
+    generateReplyForThread(userId, threadId, { signal })
+      .then((result) => {
+        if (result.sent) {
+          setReplyModalPhase("sent");
+          setReplyCountdownSec(null);
+          if (countdownIntervalRef.current) {
+            clearInterval(countdownIntervalRef.current);
+            countdownIntervalRef.current = null;
+          }
+          markThreadSentSeen(threadId);
+        } else {
+          setReplyModalPhase("draft");
+          setReplyModalDraft(result.draft);
+          setReplyModalReplyId(result.replyId);
+          setReplyModalSubject(result.subject);
+        }
+      })
+      .catch((e) => {
+        if ((e as { name?: string }).name === "AbortError") return;
+        setReplyModalPhase("error");
+        setReplyModalError(e instanceof Error ? e.message : String(e));
+        setReplyCountdownSec(null);
+      });
+  };
+
+  const handleTakeOverDuringGenerate = () => {
+    if (!userId || !replyModalThreadId) return;
+    if (countdownIntervalRef.current) {
+      clearInterval(countdownIntervalRef.current);
+      countdownIntervalRef.current = null;
+    }
+    setReplyCountdownSec(null);
+    replyAbortRef.current?.abort();
+    setReplyModalPhase("generating");
+    setReplyModalError(null);
+    generateReplyForThread(userId, replyModalThreadId, { takeOver: true })
+      .then((result) => {
+        if (result.sent) return;
+        setReplyModalPhase("draft");
+        setReplyModalDraft(result.draft);
+        setReplyModalReplyId(result.replyId);
+        setReplyModalSubject(result.subject);
+      })
+      .catch((e) => {
+        setReplyModalPhase("error");
+        setReplyModalError(e instanceof Error ? e.message : String(e));
+      });
+  };
+
+  const closeReplyModal = () => {
+    if (countdownIntervalRef.current) {
+      clearInterval(countdownIntervalRef.current);
+      countdownIntervalRef.current = null;
+    }
+    setReplyCountdownSec(null);
+    setReplyModalOpen(false);
+    setReplyModalThreadId(null);
+    setReplyModalPhase("generating");
+    setReplyModalError(null);
+    setReplyModalDraft("");
+    setReplyModalReplyId("");
+    setReplyModalEditedContent("");
+  };
+
+  const handleTakeOver = () => {
+    setReplyModalPhase("takeover");
+    setReplyModalEditedContent(replyModalDraft);
+  };
+
+  const handleSendEditedReply = async () => {
+    if (!userId || !replyModalReplyId) return;
+    setReplyModalPhase("sending");
+    setReplyModalError(null);
+    try {
+      await approveReply(userId, replyModalReplyId, replyModalEditedContent);
+      setReplyModalPhase("sent");
+      getReplies(userId).then((r) => setApiReplies(r.replies)).catch(() => {});
+    } catch (e) {
+      setReplyModalPhase("takeover");
+      setReplyModalError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const handleSaveGuardrails = async () => {
+    if (!userId) return;
+    setGuardrailsSaving(true);
+    try {
+      await setGuardrails(userId, {
+        triggerDescription: guardrailsTrigger,
+        replyInstructions: guardrailsReply,
+      });
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setGuardrailsSaving(false);
+    }
+  };
+
+  const handleModeChange = async (mode: "auto" | "approval") => {
+    if (!userId) return;
+    setUserModeState(mode);
+    try {
+      await setUserMode(userId, mode);
+    } catch (e) {
+      console.error(e);
+      setUserModeState(userMode);
+    }
+  };
+
+  const handleDisconnectGmail = async () => {
+    if (!userId) return;
+    setDisconnecting(true);
+    setErrorBanner(null);
+    try {
+      await disconnectGmail(userId);
+      try {
+        localStorage.removeItem(USER_ID_KEY);
+      } catch {
+        //
+      }
+      setUserId(null);
+      setConnected(false);
+      setApiThreads([]);
+      setApiReplies([]);
+      setActive("inbox");
+    } catch (e) {
+      console.error(e);
+      setErrorBanner(e instanceof Error ? e.message : "Disconnect failed.");
+    } finally {
+      setDisconnecting(false);
+    }
+  };
+
+  const filteredThreads = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return cases;
-    return cases.filter((c) =>
-      [c.id, c.merchant, c.category, c.status, c.desired].some((x) => x.toLowerCase().includes(q))
+    if (!q) return apiThreads;
+    return apiThreads.filter(
+      (t) =>
+        (t.subject ?? "").toLowerCase().includes(q) ||
+        (t.threadId ?? "").toLowerCase().includes(q) ||
+        (t.status ?? "").toLowerCase().includes(q)
     );
-  }, [cases, query]);
+  }, [apiThreads, query]);
 
-  const selectedItem = useMemo(() => filtered.find((c) => c.id === selected) ?? cases[0], [filtered, selected, cases]);
+  const threadsToShow = filteredThreads.slice(0, visibleThreadCount);
+  const hasMoreThreads = filteredThreads.length > visibleThreadCount;
+
+  useEffect(() => {
+    setVisibleThreadCount(10);
+  }, [query]);
 
   return (
     <div
@@ -1378,10 +953,34 @@ export default function DashboardPage() {
       style={{ fontFeatureSettings: "'cv02','cv03','cv04','cv11'" }}
     >
       <div className="flex w-screen">
-        <Sidebar active={active} onNavigate={setActive} />
+        <Sidebar
+          active={active}
+          onNavigate={setActive}
+          userId={userId}
+          connected={connected}
+          userMode={userMode}
+          onConnectGmail={handleConnectGmail}
+          onModeChange={handleModeChange}
+        />
 
         <main className="min-w-0 flex-1">
-          <TopBar query={query} setQuery={setQuery} onCreate={() => setCreateOpen(true)} />
+          <TopBar query={query} setQuery={setQuery} />
+
+          {errorBanner ? (
+            <div className="mx-auto max-w-[1400px] px-4 pt-4 sm:px-6">
+              <div className="flex items-center justify-between rounded-2xl bg-amber-50 px-4 py-3 ring-1 ring-amber-200">
+                <span className="text-sm font-semibold text-amber-900">{errorBanner}</span>
+                <button
+                  type="button"
+                  onClick={() => setErrorBanner(null)}
+                  className="rounded-lg p-1 text-amber-700 hover:bg-amber-100"
+                  aria-label="Dismiss"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+          ) : null}
 
           <div className="mx-auto w-full max-w-[1400px] px-4 py-6 sm:px-6">
             <div className="relative overflow-hidden rounded-[36px] bg-white/70 p-6 ring-1 ring-black/10 backdrop-blur md:p-8">
@@ -1390,159 +989,612 @@ export default function DashboardPage() {
               <Noise />
 
               <div className="relative flex flex-col gap-6">
-                <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-                  <div>
-                    <div className="inline-flex items-center gap-2 rounded-full bg-black/5 px-4 py-2 text-xs font-semibold text-zinc-700">
-                      <Sparkles className="h-4 w-4" style={{ color: BRAND.b }} />
-                      Premium dashboard
-                    </div>
-                    <div className="mt-4 text-balance text-3xl font-semibold tracking-tight text-zinc-950 md:text-4xl">
-                      Resolution ops, <GradientText>at a glance</GradientText>
-                    </div>
-                    <div className="mt-2 max-w-2xl text-sm leading-relaxed text-zinc-600">
-                      Monitor active negotiations, approve drafts, and see next actions — without living in your inbox.
-                    </div>
-                  </div>
-
-                  <div className="flex flex-wrap gap-2">
-                    <SecondaryButton className="gap-2">
-                      <Mail className="h-4 w-4" style={{ color: BRAND.a }} />
-                      Open inbox
-                    </SecondaryButton>
-                    <SecondaryButton className="gap-2">
-                      <Shield className="h-4 w-4" style={{ color: BRAND.b }} />
-                      Guardrails
-                    </SecondaryButton>
-                    <PrimaryButton onClick={() => setCreateOpen(true)}>Create a case</PrimaryButton>
-                  </div>
-                </div>
-
-                <div className="grid gap-4 lg:grid-cols-12">
-                  <div className="lg:col-span-9">
-                    <div className="grid gap-4 md:grid-cols-3">
-                      <KpiCard
-                        title="Active cases"
-                        value={`${cases.filter((c) => ["Running", "Awaiting reply", "Needs approval"].includes(c.status)).length}`}
-                        hint="Workflows in progress"
-                        trend={{ kind: "up", label: "+12%" }}
-                      />
-                      <KpiCard
-                        title="Avg time saved"
-                        value="3.8h"
-                        hint="Per case (est.)"
-                        trend={{ kind: "up", label: "+0.6h" }}
-                      />
-                      <KpiCard
-                        title="Resolved rate"
-                        value="71%"
-                        hint="Last 30 days"
-                        trend={{ kind: "flat", label: "steady" }}
-                      />
-                    </div>
-
-                    <div className="mt-4">
-                      {filtered.length ? (
-                        <CasesTable
-                          items={filtered}
-                          selectedId={selected}
-                          onSelect={(id) => {
-                            setSelected(id);
-                            setDrawerOpen(true);
-                          }}
-                        />
-                      ) : (
-                        <EmptyState />
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="lg:col-span-3">
-                    <RightRail />
-
-                    <div className="xl:hidden">
-                      <GlassCard className="overflow-hidden">
-                        <div className="border-b border-black/5 px-5 py-4">
-                          <div className="flex items-center justify-between">
-                            <div className="text-sm font-semibold text-zinc-950">Agent health</div>
-                            <Chip>
-                              <PillDot color={"#22C55E"} />
-                              Stable
-                            </Chip>
-                          </div>
-                          <div className="mt-2 text-sm text-zinc-600">Guardrails active. Tone stays professional.</div>
-                        </div>
-                        <div className="p-5 space-y-3">
-                          <MiniRow icon={<Gauge className="h-4 w-4" />} title="Strategy" value="Firm, evidence-based" />
-                          <MiniRow icon={<Clock className="h-4 w-4" />} title="Follow-ups" value="24h cadence" />
-                          <MiniRow icon={<Shield className="h-4 w-4" />} title="Policy" value="Respectful escalation" />
-                        </div>
-                      </GlassCard>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="grid gap-4 md:grid-cols-3">
-                  <SoftCard className="p-5">
-                    <div className="flex items-center justify-between">
-                      <div className="text-sm font-semibold text-zinc-950">Inbox status</div>
-                      <Chip>
-                        <PillDot color={BRAND.b} />
-                        Connected
-                      </Chip>
-                    </div>
-                    <div className="mt-3 text-sm text-zinc-600">Gmail OAuth active. Sending from your account.</div>
-                    <div className="mt-4 flex items-center justify-between rounded-3xl bg-black/5 p-4">
+                {active === "inbox" ? (
+                  <>
+                    <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                       <div>
-                        <div className="text-xs font-semibold text-zinc-600">Unread threads</div>
-                        <div className={cn("mt-1 text-lg font-semibold text-zinc-950", GeistMono.className)}>4</div>
+                        <h1 className="text-2xl font-semibold tracking-tight text-zinc-950 md:text-3xl">Inbox</h1>
+                        <p className="mt-1 text-sm text-zinc-600">
+                          {connected && userId
+                            ? `${apiThreads.length} thread${apiThreads.length === 1 ? "" : "s"} synced from Gmail`
+                            : "Connect Gmail and sync to load your emails."}
+                        </p>
                       </div>
-                      <IconButton label="Open inbox">
-                        <ExternalLink className="h-4 w-4 text-zinc-700" />
-                      </IconButton>
+                      {connected && userId ? (
+                        <button
+                          type="button"
+                          onClick={handleSyncInbox}
+                          disabled={syncing}
+                          className="inline-flex items-center justify-center gap-2 rounded-full bg-zinc-900 px-5 py-3 text-sm font-semibold text-white transition hover:bg-zinc-800 disabled:opacity-50"
+                        >
+                          <Mail className="h-4 w-4" />
+                          {syncing ? "Syncing…" : "Sync inbox"}
+                        </button>
+                      ) : null}
                     </div>
-                  </SoftCard>
 
-                  <SoftCard className="p-5">
-                    <div className="flex items-center justify-between">
-                      <div className="text-sm font-semibold text-zinc-950">Approval queue</div>
-                      <Chip>
-                        <PillDot color={BRAND.c} />
-                        1 pending
-                      </Chip>
+                    {!connected ? (
+                      <GlassCard className="p-10 text-center">
+                        <Mail className="mx-auto h-12 w-12 text-zinc-400" />
+                        <p className="mt-4 text-lg font-semibold text-zinc-950">Connect Gmail to see your inbox</p>
+                        <p className="mt-2 text-sm text-zinc-600">Click Connect Gmail in the sidebar, then Sync inbox to pull your emails.</p>
+                      </GlassCard>
+                    ) : filteredThreads.length === 0 ? (
+                      <GlassCard className="p-10 text-center">
+                        <Inbox className="mx-auto h-12 w-12 text-zinc-400" />
+                        <p className="mt-4 text-lg font-semibold text-zinc-950">
+                          {apiThreads.length === 0 ? "No threads yet" : "No matching threads"}
+                        </p>
+                        <p className="mt-2 text-sm text-zinc-600">
+                          {apiThreads.length === 0
+                            ? "Click Sync inbox to pull emails from Gmail."
+                            : "Try a different search."}
+                        </p>
+                        {apiThreads.length === 0 && (
+                          <button
+                            type="button"
+                            onClick={handleSyncInbox}
+                            disabled={syncing}
+                            className="mt-4 inline-flex items-center gap-2 rounded-full bg-zinc-900 px-5 py-3 text-sm font-semibold text-white hover:bg-zinc-800 disabled:opacity-50"
+                          >
+                            {syncing ? "Syncing…" : "Sync inbox"}
+                          </button>
+                        )}
+                      </GlassCard>
+                    ) : (
+                      <GlassCard className="overflow-hidden">
+                        <div className="border-b border-black/5 px-4 py-3 sm:px-6">
+                          <div className="text-xs font-semibold text-zinc-600">
+                            Showing {threadsToShow.length} of {filteredThreads.length} thread{filteredThreads.length === 1 ? "" : "s"}
+                          </div>
+                        </div>
+                        <div className="divide-y divide-black/5 max-h-[60vh] overflow-y-auto">
+                          {threadsToShow.map((t) => (
+                            <button
+                              key={t.id}
+                              type="button"
+                              onClick={() => openReplyModal(t.threadId)}
+                              className="flex w-full cursor-pointer flex-col gap-1 px-4 py-4 text-left sm:px-6 hover:bg-white/50 sm:flex-row sm:items-center sm:justify-between focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-zinc-400"
+                            >
+                              <div className="min-w-0 flex-1">
+                                <div className="truncate text-sm font-semibold text-zinc-950">
+                                  {t.subject || "(No subject)"}
+                                </div>
+                                <div className="mt-0.5 truncate text-xs text-zinc-600">
+                                  {t.threadId} · {t.status ?? "pending"}
+                                </div>
+                              </div>
+                              <span className="mt-2 flex shrink-0 items-center gap-2 sm:mt-0">
+                                <span className="rounded-full bg-black/5 px-2.5 py-1 text-xs font-semibold text-zinc-700">
+                                  {t.status ?? "pending"}
+                                </span>
+                                <span className="rounded-full bg-white/80 px-2.5 py-1 text-xs font-semibold text-zinc-600 ring-1 ring-black/10">
+                                  Auto-reply
+                                </span>
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                        {hasMoreThreads ? (
+                          <div className="border-t border-black/5 px-4 py-4 sm:px-6">
+                            <button
+                              type="button"
+                              onClick={() => setVisibleThreadCount((n) => n + 10)}
+                              className="w-full rounded-2xl bg-black/5 px-4 py-3 text-sm font-semibold text-zinc-700 transition hover:bg-black/10"
+                            >
+                              Load more ({filteredThreads.length - visibleThreadCount} more)
+                            </button>
+                          </div>
+                        ) : null}
+                      </GlassCard>
+                    )}
+                  </>
+                ) : active === "approval" ? (
+                  <>
+                    <div>
+                      <h1 className="text-2xl font-semibold tracking-tight text-zinc-950 md:text-3xl">Approval queue</h1>
+                      <p className="mt-1 text-sm text-zinc-600">Drafts waiting for your sign-off.</p>
                     </div>
-                    <div className="mt-3 text-sm text-zinc-600">Drafts waiting for your sign-off.</div>
-                    <div className="mt-4 flex gap-2">
-                      <SecondaryButton className="flex-1 gap-2">
-                        <Pencil className="h-4 w-4" />
-                        Review
-                      </SecondaryButton>
-                      <PrimaryButton className="flex-1">Approve all</PrimaryButton>
+                    {connected && userId && apiReplies.length > 0 ? (
+                      <div className="space-y-3">
+                        {apiReplies.map((r) => (
+                          <GlassCard key={r.id} className="p-4 sm:p-5">
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                              <p className="min-w-0 flex-1 text-sm text-zinc-700 whitespace-pre-wrap">
+                                {r.generatedContent}
+                              </p>
+                              <div className="flex shrink-0 gap-2">
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    if (!userId) return;
+                                    try {
+                                      await approveReply(userId, r.id);
+                                      setApiReplies((prev) => prev.filter((x) => x.id !== r.id));
+                                    } catch (e) {
+                                      console.error(e);
+                                    }
+                                  }}
+                                  className="rounded-xl bg-emerald-600 px-4 py-2 text-xs font-semibold text-white hover:bg-emerald-700"
+                                >
+                                  Approve
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    if (!userId) return;
+                                    try {
+                                      await rejectReply(userId, r.id);
+                                      setApiReplies((prev) => prev.filter((x) => x.id !== r.id));
+                                    } catch (e) {
+                                      console.error(e);
+                                    }
+                                  }}
+                                  className="rounded-xl bg-black/10 px-4 py-2 text-xs font-semibold text-zinc-700 hover:bg-black/15"
+                                >
+                                  Reject
+                                </button>
+                              </div>
+                            </div>
+                          </GlassCard>
+                        ))}
+                      </div>
+                    ) : (
+                      <GlassCard className="p-10 text-center">
+                        <CheckCircle2 className="mx-auto h-12 w-12 text-zinc-400" />
+                        <p className="mt-4 text-lg font-semibold text-zinc-950">No drafts pending</p>
+                        <p className="mt-2 text-sm text-zinc-600">
+                          {connected ? "Draft replies will appear here when in Approval mode." : "Connect Gmail to get started."}
+                        </p>
+                      </GlassCard>
+                    )}
+                  </>
+                ) : active === "guardrails" ? (
+                  <>
+                    <div>
+                      <h1 className="text-2xl font-semibold tracking-tight text-zinc-950 md:text-3xl">Guardrails</h1>
+                      <p className="mt-1 text-sm text-zinc-600">
+                        Control when the agent triggers and how replies are written.
+                      </p>
                     </div>
-                  </SoftCard>
 
-                  <SoftCard className="p-5">
-                    <div className="flex items-center justify-between">
-                      <div className="text-sm font-semibold text-zinc-950">Guardrails</div>
-                      <Chip>
-                        <PillDot color={BRAND.a} />
-                        On
-                      </Chip>
+                    <div
+                      className={cn(
+                        "rounded-3xl overflow-hidden bg-white/70 ring-1 ring-black/10 backdrop-blur",
+                        "shadow-[0_20px_80px_rgba(0,0,0,.10)]"
+                      )}
+                    >
+                      <div className="border-b border-black/5 px-6 py-5">
+                        <div className="flex items-center gap-3">
+                          <span
+                            className="inline-flex h-12 w-12 items-center justify-center rounded-2xl ring-1 ring-black/10"
+                            style={{
+                              background: `linear-gradient(135deg, ${BRAND.a}18, ${BRAND.b}18)`,
+                            }}
+                          >
+                            <Shield className="h-6 w-6" style={{ color: BRAND.a }} />
+                          </span>
+                          <div>
+                            <div className="text-sm font-semibold text-zinc-950">When to trigger & reply style</div>
+                            <div className="mt-0.5 text-xs text-zinc-600">
+                              Leave blank to reply to all inbound emails. Use instructions to tailor tone and content.
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="space-y-6 p-6">
+                        <div>
+                        <label className="block text-sm font-semibold text-zinc-800">
+                          When to trigger auto-reply
+                          </label>
+                          <p className="mt-1 text-xs text-zinc-500">
+                            Describe when the agent should respond. Empty = reply to all. Support-style detection: questions, refunds, account issues, complaints, feedback requesting a response, or your own criteria below.
+                          </p>
+                          <textarea
+                            value={guardrailsTrigger}
+                            onChange={(e) => setGuardrailsTrigger(e.target.value)}
+                            placeholder="e.g. Only respond to emails that look like customer support requests or questions about orders, refunds, or account issues."
+                            className="mt-2 w-full rounded-2xl border-0 bg-white/80 px-4 py-3 text-sm text-zinc-800 ring-1 ring-black/10 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-400"
+                            rows={3}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-semibold text-zinc-800">
+                            Reply style & instructions
+                          </label>
+                          <p className="mt-1 text-xs text-zinc-500">
+                            Adjust tone, length, and what to include in generated replies.
+                          </p>
+                          <textarea
+                            value={guardrailsReply}
+                            onChange={(e) => setGuardrailsReply(e.target.value)}
+                            placeholder="e.g. Be concise and friendly. Always include a clear next step. Sign off with first name only."
+                            className="mt-2 w-full rounded-2xl border-0 bg-white/80 px-4 py-3 text-sm text-zinc-800 ring-1 ring-black/10 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-400"
+                            rows={4}
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleSaveGuardrails}
+                          disabled={guardrailsSaving}
+                          className="w-full rounded-2xl px-4 py-3 text-sm font-semibold text-white transition disabled:opacity-50"
+                          style={{ background: `linear-gradient(90deg, ${BRAND.a}, ${BRAND.b})` }}
+                        >
+                          {guardrailsSaving ? "Saving…" : "Save guardrails"}
+                        </button>
+                      </div>
                     </div>
-                    <div className="mt-3 text-sm text-zinc-600">Professional tone, no harassment, policy references.</div>
-                    <div className="mt-4 flex items-center justify-between rounded-3xl bg-black/5 p-4">
-                      <div className="text-xs font-semibold text-zinc-700">Escalate responsibly</div>
-                      <CheckCircle2 className="h-5 w-5" style={{ color: "#22C55E" }} />
+                  </>
+                ) : (
+                  <>
+                    <div>
+                      <h1 className="text-2xl font-semibold tracking-tight text-zinc-950 md:text-3xl">Settings</h1>
+                      <p className="mt-1 text-sm text-zinc-600">Manage your account and Gmail connection.</p>
                     </div>
-                  </SoftCard>
-                </div>
+
+                    <GlassCard className="overflow-hidden mb-6">
+                      <div className="border-b border-black/5 px-6 py-5">
+                        <div className="flex items-center gap-3">
+                          <span
+                            className="inline-flex h-11 w-11 items-center justify-center rounded-2xl ring-1 ring-black/10"
+                            style={{
+                              backgroundImage: `linear-gradient(135deg, ${BRAND.b}18, ${BRAND.a}18)`,
+                            }}
+                          >
+                            <Clock className="h-5 w-5" style={{ color: BRAND.b }} />
+                          </span>
+                          <div>
+                            <div className="text-sm font-semibold text-zinc-950">Aggressive mode</div>
+                            <div className="mt-0.5 text-xs text-zinc-600">
+                              When ON: poll Gmail every 5s and sync new emails. When OFF: poll every 30s.
+                            </div>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const next = !aggressivePolling;
+                              setAggressivePolling(next);
+                              try {
+                                localStorage.setItem(AGGRESSIVE_POLLING_KEY, next ? "1" : "0");
+                              } catch {
+                                //
+                              }
+                            }}
+                            className={cn(
+                              "ml-auto shrink-0 rounded-full px-4 py-2 text-sm font-semibold transition",
+                              aggressivePolling
+                                ? "bg-emerald-500/20 text-emerald-800 ring-1 ring-emerald-500/40"
+                                : "bg-zinc-100 text-zinc-700 ring-1 ring-black/10"
+                            )}
+                          >
+                            {aggressivePolling ? "ON" : "OFF"}
+                          </button>
+                        </div>
+                      </div>
+                    </GlassCard>
+
+                    <GlassCard className="overflow-hidden">
+                      <div className="border-b border-black/5 px-6 py-5">
+                        <div className="flex items-center gap-3">
+                          <span
+                            className="inline-flex h-11 w-11 items-center justify-center rounded-2xl ring-1 ring-black/10"
+                            style={{
+                              backgroundImage: `linear-gradient(135deg, ${BRAND.a}14, ${BRAND.b}14)`,
+                            }}
+                          >
+                            <Mail className="h-5 w-5" style={{ color: BRAND.a }} />
+                          </span>
+                          <div>
+                            <div className="text-sm font-semibold text-zinc-950">Gmail</div>
+                            <div className="mt-0.5 text-xs text-zinc-600">
+                              {connected
+                                ? "Your Gmail account is connected. You can disconnect below."
+                                : "Connect Gmail from the sidebar to sync and send emails."}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="p-6">
+                        {connected && userId ? (
+                          <button
+                            type="button"
+                            onClick={handleDisconnectGmail}
+                            disabled={disconnecting}
+                            className="inline-flex items-center justify-center gap-2 rounded-2xl bg-zinc-100 px-5 py-3 text-sm font-semibold text-zinc-800 transition hover:bg-zinc-200 disabled:opacity-50"
+                          >
+                            {disconnecting ? "Disconnecting…" : "Disconnect Gmail"}
+                          </button>
+                        ) : (
+                          <p className="text-sm text-zinc-600">Gmail is not connected.</p>
+                        )}
+                      </div>
+                    </GlassCard>
+                  </>
+                )}
               </div>
             </div>
           </div>
         </main>
       </div>
 
-      <CaseDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} item={selectedItem} />
-      <CreateCaseModal open={createOpen} onClose={() => setCreateOpen(false)} />
+      <AnimatePresence>
+        {syncModalOpen ? (
+          <>
+            <motion.div
+              className="fixed inset-0 z-40 bg-black/25"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setSyncModalOpen(false)}
+            />
+            <motion.div
+              className="fixed left-1/2 top-1/2 z-50 w-[min(420px,92vw)] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-3xl bg-white ring-1 ring-black/10 shadow-xl"
+              initial={{ opacity: 0, y: -12, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -12, scale: 0.98 }}
+              transition={{ duration: 0.2 }}
+            >
+              <div className="p-6">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <span
+                      className="inline-flex h-11 w-11 items-center justify-center rounded-2xl ring-1 ring-black/10"
+                      style={{
+                        backgroundImage: `linear-gradient(135deg, ${BRAND.a}14, ${BRAND.b}14)`,
+                      }}
+                    >
+                      <Mail className="h-5 w-5" style={{ color: BRAND.a }} />
+                    </span>
+                    <div>
+                      <div className="text-sm font-semibold text-zinc-950">
+                        {syncStatus === "syncing" ? "Syncing inbox" : syncStatus === "error" ? "Sync failed" : "Sync complete"}
+                      </div>
+                      <div className="mt-1 text-sm text-zinc-600">{syncMessage}</div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSyncModalOpen(false)}
+                    className="rounded-lg p-2 text-zinc-500 hover:bg-black/5 hover:text-zinc-700"
+                    aria-label="Close"
+                  >
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
+                {(syncStatus === "success" || syncStatus === "error") && (
+                  <button
+                    type="button"
+                    onClick={() => setSyncModalOpen(false)}
+                    className="mt-4 w-full rounded-2xl bg-zinc-900 px-4 py-3 text-sm font-semibold text-white hover:bg-zinc-800"
+                  >
+                    Close
+                  </button>
+                )}
+              </div>
+            </motion.div>
+          </>
+        ) : null}
+        {replyModalOpen ? (
+          <>
+            <motion.div
+              className="fixed inset-0 z-40 bg-black/30 backdrop-blur-sm"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={closeReplyModal}
+            />
+            <motion.div
+              className="fixed left-1/2 top-1/2 z-50 w-[min(480px,94vw)] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-3xl shadow-2xl"
+              style={{
+                background: "linear-gradient(135deg, rgba(255,255,255,0.85) 0%, rgba(255,255,255,0.75) 100%)",
+                backdropFilter: "blur(20px)",
+                WebkitBackdropFilter: "blur(20px)",
+                border: "1px solid rgba(255,255,255,0.6)",
+                boxShadow: `0 25px 80px rgba(0,0,0,0.15), 0 0 0 1px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,0.8)`,
+              }}
+              initial={{ opacity: 0, y: -16, scale: 0.96 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -16, scale: 0.96 }}
+              transition={{ type: "spring", damping: 26, stiffness: 300 }}
+            >
+              <div
+                className="absolute inset-0 rounded-3xl opacity-30"
+                style={{
+                  background: `linear-gradient(135deg, ${BRAND.a}08, ${BRAND.b}08, ${BRAND.c}06)`,
+                }}
+              />
+              <div className="relative p-6">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex flex-col gap-2">
+                    {replyCountdownSec != null && replyCountdownSec > 0 && (replyModalPhase === "generating" || replyModalPhase === "draft") && (
+                      <div className="flex items-center gap-2 rounded-xl bg-white/70 px-3 py-2 ring-1 ring-black/5">
+                        <Clock className="h-4 w-4 text-zinc-500 shrink-0" />
+                        <span className="text-sm font-semibold tabular-nums text-zinc-700">
+                          {userMode === "auto"
+                            ? `Sending in ${replyCountdownSec}s`
+                            : `Take over within ${replyCountdownSec}s`}
+                        </span>
+                      </div>
+                    )}
+                    <div className="flex items-center gap-3">
+                      <span
+                        className="inline-flex h-11 w-11 items-center justify-center rounded-2xl"
+                        style={{
+                          background: `linear-gradient(135deg, ${BRAND.a}22, ${BRAND.b}22)`,
+                          boxShadow: `0 0 0 1px rgba(0,0,0,0.06)`,
+                        }}
+                      >
+                        <Bot className="h-5 w-5" style={{ color: BRAND.a }} />
+                      </span>
+                      <div>
+                        <div className="text-sm font-semibold text-zinc-950">
+                          {replyModalPhase === "generating" && "Generating reply…"}
+                          {replyModalPhase === "sending" && "Sending…"}
+                          {replyModalPhase === "sent" && "Sent"}
+                          {replyModalPhase === "draft" && "Draft ready"}
+                          {replyModalPhase === "takeover" && "Edit & send"}
+                          {replyModalPhase === "error" && "Error"}
+                        </div>
+                        {replyModalSubject && replyModalPhase !== "generating" && replyModalPhase !== "sending" && (
+                          <div className="mt-0.5 truncate text-xs text-zinc-600">{replyModalSubject}</div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={closeReplyModal}
+                    className="rounded-xl p-2 text-zinc-500 hover:bg-white/60 hover:text-zinc-700 transition"
+                    aria-label="Close"
+                  >
+                    <X className="h-5 w-5" />
+                  </button>
+                </div>
+
+                {(replyModalPhase === "generating" || replyModalPhase === "sending") && (
+                  <div className="mt-5 flex flex-col gap-4">
+                    <div className="flex flex-col gap-2">
+                      <div className="h-3 w-full overflow-hidden rounded-full bg-white/60 ring-1 ring-black/5">
+                        <motion.div
+                          className="h-full rounded-full"
+                          style={{ background: `linear-gradient(90deg, ${BRAND.a}, ${BRAND.b})` }}
+                          initial={{ width: "20%" }}
+                          animate={{ width: ["20%", "85%", "20%"] }}
+                          transition={{ duration: 1.8, repeat: Infinity, ease: "easeInOut" }}
+                        />
+                      </div>
+                      <p className="text-xs text-zinc-500">
+                        {replyModalPhase === "generating" ? "Creating reply and checking safety…" : "Sending via Gmail…"}
+                      </p>
+                    </div>
+                    {replyModalPhase === "generating" && (
+                      <button
+                        type="button"
+                        onClick={handleTakeOverDuringGenerate}
+                        className="w-full rounded-2xl border-2 border-dashed border-zinc-300 px-4 py-3 text-sm font-semibold text-zinc-600 transition hover:border-zinc-400 hover:bg-white/50 hover:text-zinc-800"
+                      >
+                        Take over — edit before sending
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {replyModalPhase === "sent" && (
+                  <div className="mt-5 flex flex-col items-center gap-4 rounded-2xl bg-emerald-500/10 px-6 py-8 ring-1 ring-emerald-500/20">
+                    <motion.div
+                      initial={{ scale: 0, opacity: 0 }}
+                      animate={{ scale: 1, opacity: 1 }}
+                      transition={{ type: "spring", damping: 14, stiffness: 200, delay: 0.1 }}
+                      className="flex h-20 w-20 items-center justify-center rounded-full bg-emerald-500/20 ring-4 ring-emerald-500/30"
+                    >
+                      <motion.div
+                        initial={{ pathLength: 0, opacity: 0 }}
+                        animate={{ pathLength: 1, opacity: 1 }}
+                        transition={{ delay: 0.25, duration: 0.4, ease: "easeOut" }}
+                        className="text-emerald-600"
+                      >
+                        <CheckCircle2 className="h-12 w-12" strokeWidth={2.5} />
+                      </motion.div>
+                    </motion.div>
+                    <motion.p
+                      initial={{ opacity: 0, y: 4 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: 0.4 }}
+                      className="text-center text-base font-semibold text-emerald-800"
+                    >
+                      Reply sent
+                    </motion.p>
+                    <motion.p
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      transition={{ delay: 0.5 }}
+                      className="text-center text-sm text-emerald-700"
+                    >
+                      Your reply was sent automatically.
+                    </motion.p>
+                  </div>
+                )}
+
+                {(replyModalPhase === "draft" || replyModalPhase === "takeover") && (
+                  <div className="mt-5 space-y-4">
+                    {replyModalPhase === "draft" ? (
+                      <>
+                        <div className="max-h-40 overflow-y-auto rounded-2xl bg-white/70 p-4 text-sm text-zinc-700 whitespace-pre-wrap ring-1 ring-black/5">
+                          {replyModalDraft}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={handleTakeOver}
+                          className="w-full rounded-2xl px-4 py-3 text-sm font-semibold text-white transition shadow-lg hover:opacity-95"
+                          style={{ background: `linear-gradient(90deg, ${BRAND.a}, ${BRAND.b})` }}
+                        >
+                          Take over — edit & send
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <textarea
+                          value={replyModalEditedContent}
+                          onChange={(e) => setReplyModalEditedContent(e.target.value)}
+                          className="w-full max-h-48 rounded-2xl border-0 bg-white/80 p-4 text-sm text-zinc-800 ring-1 ring-black/10 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-400"
+                          placeholder="Edit your reply…"
+                          rows={6}
+                        />
+                        {replyModalError && (
+                          <p className="text-sm text-red-600">{replyModalError}</p>
+                        )}
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={closeReplyModal}
+                            className="flex-1 rounded-2xl bg-zinc-100 px-4 py-3 text-sm font-semibold text-zinc-700 hover:bg-zinc-200"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleSendEditedReply}
+                            disabled={!replyModalEditedContent.trim()}
+                            className="flex-1 rounded-2xl px-4 py-3 text-sm font-semibold text-white transition disabled:opacity-50"
+                            style={{ background: `linear-gradient(90deg, ${BRAND.a}, ${BRAND.b})` }}
+                          >
+                            Send
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+
+                {replyModalPhase === "error" && (
+                  <div className="mt-5 space-y-4">
+                    <p className="rounded-2xl bg-red-50 px-4 py-3 text-sm text-red-800 ring-1 ring-red-200">
+                      {replyModalError}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={closeReplyModal}
+                      className="w-full rounded-2xl bg-zinc-900 px-4 py-3 text-sm font-semibold text-white hover:bg-zinc-800"
+                    >
+                      Close
+                    </button>
+                  </div>
+                )}
+
+                {replyModalPhase === "sent" && (
+                  <button
+                    type="button"
+                    onClick={closeReplyModal}
+                    className="mt-4 w-full rounded-2xl bg-zinc-900 px-4 py-3 text-sm font-semibold text-white hover:bg-zinc-800"
+                  >
+                    Close
+                  </button>
+                )}
+              </div>
+            </motion.div>
+          </>
+        ) : null}
+      </AnimatePresence>
     </div>
   );
 }
