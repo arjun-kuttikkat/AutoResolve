@@ -7,12 +7,24 @@ export interface SafetyResult {
   confidence: number;
 }
 
+/** Phrases that suggest the reply is claiming past actions we cannot verify (hallucination). */
+const HALLUCINATION_PHRASES = [
+  /\bwe've?\s+(received|processed|updated|sent|shipped|completed)\b/i,
+  /\bwe\s+have\s+(received|processed|updated|sent|shipped|completed)\b/i,
+  /\bas\s+per\s+(our\s+)?records?\b/i,
+  /\bour\s+records?\s+show\b/i,
+  /\b(our|we)\s+have\s+on\s+file\b/i,
+  /\byour\s+(request|order|application)\s+has\s+been\s+(processed|shipped|approved|updated)\b/i,
+  /\b(already\s+)?(processed|received|shipped)\s+your\b/i,
+];
+
 function quickRegexCheck(replyContent: string): SafetyResult {
   const hasThreats = /(sue|legal action|lawyer|attorney|lawsuit)/i.test(replyContent);
   const hasFraudAdmission = /(fraud|stole|illegal|committed)/i.test(replyContent);
   const hasSensitiveInfo = /(ssn|social security|password|credit card|account number)/i.test(
     replyContent
   );
+  const hasHallucination = HALLUCINATION_PHRASES.some((re) => re.test(replyContent));
   const hasCTA = /(please|request|would like|need|ask)/i.test(replyContent);
   const isCoherent =
     replyContent.length > 50 && replyContent.length < 2000;
@@ -21,11 +33,17 @@ function quickRegexCheck(replyContent: string): SafetyResult {
   if (hasThreats) reasons.push("hasThreats");
   if (hasFraudAdmission) reasons.push("hasFraudAdmission");
   if (hasSensitiveInfo) reasons.push("hasSensitiveInfo");
+  if (hasHallucination) reasons.push("possibleHallucination");
   if (!hasCTA) reasons.push("missingCTA");
   if (!isCoherent) reasons.push("notCoherent");
 
   const passed =
-    !hasThreats && !hasFraudAdmission && !hasSensitiveInfo && hasCTA && isCoherent;
+    !hasThreats &&
+    !hasFraudAdmission &&
+    !hasSensitiveInfo &&
+    !hasHallucination &&
+    hasCTA &&
+    isCoherent;
 
   return {
     passed,
@@ -52,11 +70,12 @@ export async function checkSafetyGates(replyContent: string): Promise<SafetyResu
     messages: [
       {
         role: "system",
-        content: "You are a safety validator for email replies. Output JSON only.",
+        content:
+          "You are a safety validator for email replies. Output JSON only. STRICT: Set allow_auto_send to false if the reply claims any past action (e.g. 'we have received', 'we've processed', 'your order has been shipped', 'as per our records') that could be hallucinated — we have no access to external systems or records. Only allow auto_send if the reply uses only information from the thread and does not invent outcomes or actions that have already occurred.",
       },
       {
         role: "user",
-        content: `Validate this email reply for safety:\n\n${replyContent}\n\nOutput JSON: { "allow_auto_send": boolean, "reasons": string[], "confidence": 0-100 }`,
+        content: `Validate this email reply for safety and possible hallucination:\n\n${replyContent}\n\nOutput JSON: { "allow_auto_send": boolean, "reasons": string[], "confidence": 0-100 }. Set allow_auto_send false if it claims we did something or have records we cannot verify.`,
       },
     ],
     response_format: { type: "json_object" },

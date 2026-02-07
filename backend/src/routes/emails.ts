@@ -81,12 +81,14 @@ router.get("/threads/:threadId", async (req: Request, res: Response) => {
 router.post("/threads/:threadId/generate-reply", async (req: Request, res: Response) => {
   const userId = getUserId(req);
   const threadId = req.params.threadId;
-  const takeOver = (req.body as { takeOver?: boolean }).takeOver === true;
+  const body = req.body as { takeOver?: boolean; context?: string };
+  const takeOver = body.takeOver === true;
+  const context = typeof body.context === "string" ? body.context.trim() : undefined;
   if (!userId || !threadId) {
     return res.status(400).json({ error: "userId and threadId required" });
   }
   try {
-    const result = await generateReplyForThread(userId, threadId, { takeOver });
+    const result = await generateReplyForThread(userId, threadId, { takeOver, context });
     return res.json(result);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

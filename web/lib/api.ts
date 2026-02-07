@@ -72,19 +72,24 @@ export async function getThread(userId: string, threadId: string): Promise<{
 
 export type GenerateReplyResult =
   | { sent: true; messageId?: string }
-  | { sent: false; draft: string; replyId: string; subject: string | null; threadId: string };
+  | { sent: false; draft: string; replyId: string; subject: string | null; threadId: string }
+  | { needsHuman: true; reason: string; threadId: string };
 
 export async function generateReplyForThread(
   userId: string,
   threadId: string,
-  options?: { takeOver?: boolean; signal?: AbortSignal }
+  options?: { takeOver?: boolean; context?: string; signal?: AbortSignal }
 ): Promise<GenerateReplyResult> {
   const res = await fetch(
     `${API_URL}/api/emails/threads/${encodeURIComponent(threadId)}/generate-reply`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId, takeOver: options?.takeOver === true }),
+      body: JSON.stringify({
+        userId,
+        takeOver: options?.takeOver === true,
+        context: options?.context?.trim() || undefined,
+      }),
       signal: options?.signal,
     }
   );
@@ -148,13 +153,22 @@ export async function setUserMode(
   userId: string,
   mode: "auto" | "approval"
 ): Promise<{ ok: boolean; mode: string }> {
-  const res = await fetch(`${API_URL}/api/users/me`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ userId, mode }),
-  });
-  if (!res.ok) throw new Error("Failed to set mode");
-  return res.json();
+  try {
+    const url = API_URL + "/api/users/me";
+    const res = await fetch(url, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId, mode }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const msg = (data as { error?: string }).error ?? "Failed to set mode";
+      throw new Error(msg);
+    }
+    return data as { ok: boolean; mode: string };
+  } catch (e) {
+    wrapNetworkError(e, "set mode");
+  }
 }
 
 export async function getGuardrails(userId: string): Promise<{
@@ -177,4 +191,43 @@ export async function setGuardrails(
   });
   if (!res.ok) throw new Error("Failed to save guardrails");
   return res.json();
+}
+
+export type NotificationPayload = {
+  id: string;
+  type: "autonomous_reply" | "reply_sent" | "support_detected" | "human_intervention";
+  title: string;
+  message?: string;
+  subject?: string;
+  threadId?: string;
+  timestamp: number;
+};
+
+export async function getNotifications(
+  userId: string,
+  limit = 10,
+  offset = 0
+): Promise<{ notifications: NotificationPayload[]; hasMore: boolean }> {
+  const res = await fetch(
+    `${API_URL}/api/users/notifications?userId=${encodeURIComponent(userId)}&limit=${limit}&offset=${offset}`
+  );
+  if (!res.ok) throw new Error("Failed to fetch notifications");
+  return res.json();
+}
+
+export async function createNotification(
+  userId: string,
+  data: { type: NotificationPayload["type"]; title: string; message?: string; subject?: string; threadId?: string }
+): Promise<NotificationPayload> {
+  const res = await fetch(`${API_URL}/api/users/notifications`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userId, ...data }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg = (body as { error?: string }).error ?? "Failed to create notification";
+    throw new Error(msg);
+  }
+  return body as NotificationPayload;
 }

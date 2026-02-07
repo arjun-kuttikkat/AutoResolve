@@ -6,13 +6,20 @@ import {
   emailThreads,
   emails,
   emailReplies,
+  notifications,
+  type EmailReply,
 } from "../db/schema.js";
 import { eq, and, desc } from "drizzle-orm";
 import { getGmailClient, getProfile, createClientWithTokens } from "./gmail.js";
 import { decrypt } from "./tokenManager.js";
 import { refreshIfNeeded } from "./tokenManager.js";
 import { checkSafetyGates } from "./safetyGates.js";
-import { generateReply, shouldTriggerReply } from "./openai.js";
+import {
+  generateReply,
+  shouldTriggerReply,
+  parseSenderName,
+  classifyInboundEmail,
+} from "./openai.js";
 import { getEnv } from "../config/env.js";
 import type { gmail_v1 } from "googleapis";
 
@@ -201,17 +208,15 @@ export async function processMessage(userId: string, messageId: string): Promise
     .where(eq(userGuardrails.userId, userId))
     .limit(1);
   const triggerDescription = guardrails?.triggerDescription?.trim() ?? "";
-  if (triggerDescription) {
-    try {
-      const shouldTrigger = await shouldTriggerReply(from, subject, body, triggerDescription);
-      if (!shouldTrigger) return;
-    } catch (err) {
-      console.warn("Trigger check failed, skipping reply:", err instanceof Error ? err.message : err);
-      return;
-    }
+  try {
+    const shouldTrigger = await shouldTriggerReply(from, subject, body, triggerDescription);
+    if (!shouldTrigger) return;
+  } catch (err) {
+    console.warn("Trigger check failed, skipping reply:", err instanceof Error ? err.message : err);
+    return;
   }
 
-  // Build thread history for reply (10 most recent, then chronological for prompt)
+  // Build thread history for classification and reply (10 most recent, chronological)
   const threadEmails = await db
     .select()
     .from(emails)
@@ -223,11 +228,80 @@ export async function processMessage(userId: string, messageId: string): Promise
     body: e.body ?? "",
   }));
 
+  // Classify: can we reply, need human, or escalate?
+  let classification: { action: "reply" | "escalate" | "needs_human"; reason?: string; escalateTo?: string };
+  try {
+    classification = await classifyInboundEmail(threadHistory, from, subject, body);
+  } catch (err) {
+    console.warn("Classification failed, defaulting to reply:", err instanceof Error ? err.message : err);
+    classification = { action: "reply" };
+  }
+
+  if (classification.action === "needs_human") {
+    await db.insert(notifications).values({
+      userId,
+      type: "human_intervention",
+      title: "Human intervention needed",
+      message: classification.reason ?? "Sender requested something that needs your attention.",
+      subject: subject ?? null,
+      threadId,
+    });
+    await db
+      .update(emailThreads)
+      .set({ status: "processing", updatedAt: new Date() })
+      .where(eq(emailThreads.id, thread.id));
+    return;
+  }
+
+  if (classification.action === "escalate" && classification.escalateTo) {
+    const escalateTo = classification.escalateTo;
+    const fwdSubject = subject?.toLowerCase().startsWith("fwd:") ? subject : `Fwd: ${subject ?? "Email"}`;
+    const fwdBody = `---------- Forwarded message ---------\nFrom: ${from}\nDate: ${new Date().toISOString()}\nSubject: ${subject ?? ""}\nTo: ${to}\n\n${body}`;
+    const raw = [
+      `From: ${to}`,
+      `To: ${escalateTo}`,
+      `Subject: ${fwdSubject}`,
+      "",
+      fwdBody,
+    ].join("\r\n");
+    const encoded = Buffer.from(raw, "utf8").toString("base64url");
+    try {
+      await gmail.users.messages.send({
+        userId: "me",
+        requestBody: { raw: encoded },
+      });
+      await db.insert(notifications).values({
+        userId,
+        type: "autonomous_reply",
+        title: "Escalated",
+        message: `Forwarded to ${escalateTo}`,
+        subject: subject ?? null,
+        threadId,
+      });
+    } catch (err) {
+      console.warn("Escalation forward failed:", err instanceof Error ? err.message : err);
+      await db.insert(notifications).values({
+        userId,
+        type: "human_intervention",
+        title: "Escalation failed",
+        message: `Could not forward to ${escalateTo}. Please forward manually.`,
+        subject: subject ?? null,
+        threadId,
+      });
+    }
+    await db
+      .update(emailThreads)
+      .set({ status: "replied", updatedAt: new Date() })
+      .where(eq(emailThreads.id, thread.id));
+    return;
+  }
+
   const replyInstructions = guardrails?.replyInstructions ?? null;
+  const senderName = parseSenderName(from);
   let generatedContent: string;
   let safety: { confidence: number; passed: boolean };
   try {
-    generatedContent = await generateReply(threadHistory, replyInstructions);
+    generatedContent = await generateReply(threadHistory, replyInstructions, senderName);
     safety = await checkSafetyGates(generatedContent);
   } catch (err) {
     // OPENAI_API_KEY not set or reply generation failed; thread and email are already stored
@@ -246,6 +320,18 @@ export async function processMessage(userId: string, messageId: string): Promise
       status: "draft",
       confidenceScore: safety.confidence,
       safetyCheckPassed: safety.passed,
+    })
+    .onConflictDoUpdate({
+      target: [emailReplies.userId, emailReplies.inboundMessageId],
+      set: {
+        emailId: emailRow.id,
+        threadId: thread.id,
+        generatedContent,
+        status: "draft",
+        confidenceScore: safety.confidence,
+        safetyCheckPassed: safety.passed,
+        updatedAt: new Date(),
+      },
     })
     .returning();
 
@@ -296,6 +382,14 @@ export async function processMessage(userId: string, messageId: string): Promise
         .update(emailThreads)
         .set({ status: "replied", updatedAt: new Date() })
         .where(eq(emailThreads.id, thread.id));
+      await db.insert(notifications).values({
+        userId,
+        type: "reply_sent",
+        title: "Reply sent",
+        message: `Auto-replied to ${replyTo} about: ${subject?.slice(0, 80) ?? "no subject"}`,
+        subject: subject ?? null,
+        threadId,
+      });
     } catch (err) {
       await db
         .update(emailReplies)
@@ -316,15 +410,17 @@ export async function processMessage(userId: string, messageId: string): Promise
 
 export type GenerateReplyForThreadResult =
   | { sent: true; messageId?: string }
-  | { sent: false; draft: string; replyId: string; subject: string; threadId: string };
+  | { sent: false; draft: string; replyId: string; subject: string; threadId: string }
+  | { needsHuman: true; reason: string; threadId: string };
 
 /** Generate (and optionally send) a reply for a thread. Used by the agentic reply modal. */
 export async function generateReplyForThread(
   userId: string,
   gmailThreadId: string,
-  options?: { takeOver?: boolean }
+  options?: { takeOver?: boolean; context?: string }
 ): Promise<GenerateReplyForThreadResult> {
   const takeOver = options?.takeOver === true;
+  const humanContext = options?.context?.trim() ?? "";
   const db = getDb();
   const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
   if (!user) throw new Error(`User not found: ${userId}`);
@@ -334,7 +430,12 @@ export async function generateReplyForThread(
     .from(userGuardrails)
     .where(eq(userGuardrails.userId, userId))
     .limit(1);
-  const replyInstructions = guardrails?.replyInstructions ?? null;
+  let replyInstructions = guardrails?.replyInstructions ?? null;
+  if (humanContext) {
+    replyInstructions = [replyInstructions, `Context from user (use this to generate an accurate reply): ${humanContext}`]
+      .filter(Boolean)
+      .join("\n\n");
+  }
 
   const [tokenRow] = await db
     .select()
@@ -388,29 +489,160 @@ export async function generateReplyForThread(
     body: e.body ?? "",
   }));
 
+  // When human provided context or user chose "take over", skip classification and generate
+  if (!humanContext && !takeOver) {
+    // Classify: if this needs human intervention, notify and don't generate a reply
+    try {
+      const classification = await classifyInboundEmail(
+        threadHistory,
+        latestInbound.fromEmail,
+        latestInbound.subject ?? "",
+        latestInbound.body ?? ""
+      );
+      if (classification.action === "needs_human") {
+        await db.insert(notifications).values({
+          userId,
+          type: "human_intervention",
+          title: "Human intervention needed",
+          message: classification.reason ?? "This thread needs your attention.",
+          subject: latestInbound.subject ?? null,
+          threadId: gmailThreadId,
+        });
+        return {
+          needsHuman: true,
+          reason: classification.reason ?? "This thread needs your attention.",
+          threadId: gmailThreadId,
+        };
+      }
+      if (classification.action === "escalate" && classification.escalateTo) {
+      const escalateTo = classification.escalateTo;
+      const body = latestInbound.body ?? "";
+      const subject = latestInbound.subject ?? "";
+      const from = latestInbound.fromEmail;
+      const fwdSubject = subject.toLowerCase().startsWith("fwd:") ? subject : `Fwd: ${subject || "Email"}`;
+      const fwdBody = `---------- Forwarded message ---------\nFrom: ${from}\nSubject: ${subject}\n\n${body}`;
+      const raw = [
+        `To: ${escalateTo}`,
+        `Subject: ${fwdSubject}`,
+        "",
+        fwdBody,
+      ].join("\r\n");
+      const profile = await getProfile(client);
+      const toEmail = profile.emailAddress ?? "";
+      const encoded = Buffer.from(
+        `From: ${toEmail}\r\nTo: ${escalateTo}\r\nSubject: ${fwdSubject}\r\n\r\n${fwdBody}`,
+        "utf8"
+      ).toString("base64url");
+      try {
+        await gmail.users.messages.send({
+          userId: "me",
+          requestBody: { raw: encoded },
+        });
+        await db.insert(notifications).values({
+          userId,
+          type: "autonomous_reply",
+          title: "Escalated",
+          message: `Forwarded to ${escalateTo}`,
+          subject: latestInbound.subject ?? null,
+          threadId: gmailThreadId,
+        });
+      } catch {
+        await db.insert(notifications).values({
+          userId,
+          type: "human_intervention",
+          title: "Escalation failed",
+          message: `Could not forward to ${escalateTo}. Please forward manually.`,
+          subject: latestInbound.subject ?? null,
+          threadId: gmailThreadId,
+        });
+      }
+      return { sent: true, messageId: undefined };
+    }
+  } catch (err) {
+    console.warn("Classification in generateReplyForThread failed, continuing:", err instanceof Error ? err.message : err);
+  }
+  }
+
+  const senderName = parseSenderName(latestInbound.fromEmail);
   let generatedContent: string;
   let safety: { confidence: number; passed: boolean };
   try {
-    generatedContent = await generateReply(threadHistory, replyInstructions);
+    generatedContent = await generateReply(threadHistory, replyInstructions, senderName);
     safety = await checkSafetyGates(generatedContent);
   } catch (err) {
     throw new Error(err instanceof Error ? err.message : "Reply generation failed");
   }
 
-  const [reply] = await db
-    .insert(emailReplies)
-    .values({
-      userId,
-      emailId: latestInbound.id,
-      threadId: threadRow.id,
-      inboundMessageId: latestInbound.messageId,
-      generatedContent,
-      status: "draft",
-      confidenceScore: safety.confidence,
-      safetyCheckPassed: safety.passed,
-    })
-    .returning();
-  if (!reply) throw new Error("Failed to save draft");
+  let row: EmailReply | null = null;
+  try {
+    const [reply] = await db
+      .insert(emailReplies)
+      .values({
+        userId,
+        emailId: latestInbound.id,
+        threadId: threadRow.id,
+        inboundMessageId: latestInbound.messageId,
+        generatedContent,
+        status: "draft",
+        confidenceScore: safety.confidence,
+        safetyCheckPassed: safety.passed,
+      })
+      .onConflictDoUpdate({
+        target: [emailReplies.userId, emailReplies.inboundMessageId],
+        set: {
+          emailId: latestInbound.id,
+          threadId: threadRow.id,
+          generatedContent,
+          status: "draft",
+          confidenceScore: safety.confidence,
+          safetyCheckPassed: safety.passed,
+          updatedAt: new Date(),
+        },
+        where: eq(emailReplies.status, "draft"),
+      })
+      .returning();
+    row = reply ?? null;
+  } catch (err: unknown) {
+    const code = (err as { code?: string })?.code;
+    if (code === "23505") {
+      const [existing] = await db
+        .select()
+        .from(emailReplies)
+        .where(
+          and(
+            eq(emailReplies.userId, userId),
+            eq(emailReplies.inboundMessageId, latestInbound.messageId)
+          )
+        )
+        .limit(1);
+      if (existing) {
+        if (existing.status === "sent") {
+          return { sent: true, messageId: existing.providerMessageId ?? undefined };
+        }
+        row = existing;
+      }
+    }
+    if (!row) throw err;
+  }
+  if (!row) {
+    const [existing] = await db
+      .select()
+      .from(emailReplies)
+      .where(
+        and(
+          eq(emailReplies.userId, userId),
+          eq(emailReplies.inboundMessageId, latestInbound.messageId)
+        )
+      )
+      .limit(1);
+    if (existing?.status === "sent") {
+      return { sent: true, messageId: existing.providerMessageId ?? undefined };
+    }
+    throw new Error("Failed to save draft");
+  }
+  if (row.status === "sent") {
+    return { sent: true, messageId: row.providerMessageId ?? undefined };
+  }
 
   const mode = user.mode ?? "approval";
   const from = latestInbound.fromEmail;
@@ -447,11 +679,19 @@ export async function generateReplyForThread(
           sentAt: new Date(),
           updatedAt: new Date(),
         })
-        .where(eq(emailReplies.id, reply.id));
+        .where(eq(emailReplies.id, row.id));
       await db
         .update(emailThreads)
         .set({ status: "replied", updatedAt: new Date() })
         .where(eq(emailThreads.id, threadRow.id));
+      await db.insert(notifications).values({
+        userId,
+        type: "reply_sent",
+        title: "Reply sent",
+        message: `Replied to ${from} about: ${subject?.slice(0, 80) ?? "no subject"}`,
+        subject: subject ?? null,
+        threadId: gmailThreadId,
+      });
       return { sent: true, messageId: sendRes.data.id ?? undefined };
     } catch (err) {
       await db
@@ -461,7 +701,7 @@ export async function generateReplyForThread(
           error: err instanceof Error ? err.message : String(err),
           updatedAt: new Date(),
         })
-        .where(eq(emailReplies.id, reply.id));
+        .where(eq(emailReplies.id, row.id));
       throw err;
     }
   }
@@ -469,7 +709,7 @@ export async function generateReplyForThread(
   return {
     sent: false,
     draft: generatedContent,
-    replyId: reply.id,
+    replyId: row.id,
     subject: subject.startsWith("re:") ? subject : `Re: ${subject}`,
     threadId: gmailThreadId,
   };

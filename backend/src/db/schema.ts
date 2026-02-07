@@ -91,6 +91,21 @@ export const emails = pgTable(
   (table) => [uniqueIndex("emails_message_id_idx").on(table.messageId)]
 );
 
+export const notifications = pgTable("notifications", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  type: varchar("type", { length: 32 })
+    .notNull()
+    .$type<"autonomous_reply" | "reply_sent" | "support_detected" | "human_intervention">(),
+  title: varchar("title", { length: 512 }).notNull(),
+  message: text("message"),
+  subject: varchar("subject", { length: 1024 }),
+  threadId: varchar("thread_id", { length: 64 }),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+});
+
 export const emailReplies = pgTable(
   "email_replies",
   {
@@ -132,5 +147,7 @@ export type EmailThread = typeof emailThreads.$inferSelect;
 export type NewEmailThread = typeof emailThreads.$inferInsert;
 export type Email = typeof emails.$inferSelect;
 export type NewEmail = typeof emails.$inferInsert;
+export type Notification = typeof notifications.$inferSelect;
+export type NewNotification = typeof notifications.$inferInsert;
 export type EmailReply = typeof emailReplies.$inferSelect;
 export type NewEmailReply = typeof emailReplies.$inferInsert;

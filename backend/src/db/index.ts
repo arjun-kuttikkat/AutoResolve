@@ -10,9 +10,16 @@ let pool: pg.Pool | null = null;
 export function getDb() {
   if (!pool) {
     const env = getEnv();
+    const url = env.DATABASE_URL;
+    const isSupabase =
+      url.includes("supabase.com") || url.includes("pooler.supabase");
     pool = new Pool({
-      connectionString: env.DATABASE_URL,
+      connectionString: url,
       max: 10,
+      ...(isSupabase && {
+        // Supabase pooler cert chain can trigger SELF_SIGNED_CERT_IN_CHAIN in Node
+        ssl: { rejectUnauthorized: false },
+      }),
     });
   }
   return drizzle(pool, { schema });

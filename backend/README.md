@@ -81,7 +81,9 @@ Node.js/Express backend for Gmail OAuth, email sync (history + Pub/Sub), and Cha
    1. In the left sidebar, click **"Table Editor"**.
    2. You should see tables: **users**, **oauth_tokens**, **email_threads**, **emails**, **email_replies**.
    3. Run the Guardrails migration: open **`backend/src/db/migrations/0001_user_guardrails.sql`**, copy its contents into a new SQL Editor query, and run it. You should then see **user_guardrails** in the Table Editor.
-   4. If you see all tables, the backend is ready to use this database.
+   4. Run the Notifications migration: open **`backend/src/db/migrations/0002_notifications.sql`**, copy its contents into a new SQL Editor query, and run it. You should then see **notifications** in the Table Editor.
+   5. Run the notification thread_id migration: open **`backend/src/db/migrations/0003_notification_thread_id.sql`**, copy its contents into a new SQL Editor query, and run it. This adds **thread_id** to **notifications** so human-intervention notifications can link to the correct Gmail thread. If you see `column "thread_id" does not exist` when loading notifications, you need this migration.
+   5. If you see all tables, the backend is ready to use this database.
 
    **If you use the pooler (Transaction mode) instead**
 
@@ -101,6 +103,9 @@ Node.js/Express backend for Gmail OAuth, email sync (history + Pub/Sub), and Cha
   - **Access blocked / test users:** Add your Google account under OAuth consent screen → **Test users** (see earlier in this README).
   - **Database/encryption:** Ensure Supabase is reachable and `ENCRYPTION_KEY` is set (32 bytes, e.g. `openssl rand -base64 32`).
 - **"Database unreachable" / ENOTFOUND** – Backend can’t resolve or reach your Supabase host. Fix: (1) Check internet; (2) In [Supabase Dashboard](https://supabase.com/dashboard), open the project and **restore** it if paused; (3) Confirm `DATABASE_URL` in `.env` matches the project’s connection string; **Better fix:** Use the **connection pooler** URL. In Supabase Dashboard → your project → Project Settings → Database → Connection string → URI tab, copy the **Session** or **Transaction** pooler URI (host `aws-0-REGION.pooler.supabase.com`). Replace `[YOUR-PASSWORD]` and set as `DATABASE_URL` in `backend/.env`. The pooler host often resolves when the direct host does not. Or try another network (e.g. phone hotspot) or disable VPN.
+- **EADDRNOTAVAIL / connection read error** – Supabase’s pooler requires TLS. The backend enables SSL automatically when `DATABASE_URL` contains `supabase.com`. If you still see this, confirm you’re using the pooler URI (not the direct DB host) and that no firewall or VPN is blocking outbound 5432.
+- **SELF_SIGNED_CERT_IN_CHAIN** – The backend uses `rejectUnauthorized: false` for Supabase so the pooler’s certificate chain is accepted. If you still see this after restarting the backend, ensure `DATABASE_URL` points at a Supabase host (so the SSL override is applied).
+- **column "thread_id" does not exist** – Run the migration **`backend/src/db/migrations/0003_notification_thread_id.sql`** in the Supabase SQL Editor (see Step C.5 above). This adds the `thread_id` column to the `notifications` table.
 
 ## API
 

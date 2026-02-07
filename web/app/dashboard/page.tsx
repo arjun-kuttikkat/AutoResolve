@@ -4,7 +4,7 @@
 // Tailwind required. Framer Motion + lucide-react required.
 // Drop-in for Next.js App Router: app/dashboard/page.tsx (or any route).
 
-import React, { useMemo, useState, useEffect, useRef } from "react";
+import React, { Fragment, useMemo, useState, useEffect, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { GeistSans, GeistMono } from "geist/font";
@@ -22,6 +22,8 @@ import {
   generateReplyForThread,
   getGuardrails,
   setGuardrails,
+  getNotifications,
+  createNotification,
 } from "@/lib/api";
 import { Logo } from "@/components/Logo";
 import {
@@ -421,9 +423,27 @@ function Sidebar({
 function TopBar({
   query,
   setQuery,
+  notifications,
+  notificationsOpen,
+  setNotificationsOpen,
+  onClearNotifications,
+  onLoadMoreNotifications,
+  onNotificationOpenThread,
+  notificationsHasMore,
+  notificationsLoading,
+  bellPulse: bellPulseVal = false,
 }: {
   query: string;
   setQuery: (v: string) => void;
+  notifications: Array<{ id: string; type: string; title: string; message?: string; subject?: string; threadId?: string; timestamp: number }>;
+  notificationsOpen: boolean;
+  setNotificationsOpen: (v: boolean) => void;
+  onClearNotifications?: () => void;
+  onLoadMoreNotifications?: () => void;
+  onNotificationOpenThread?: (threadId: string, notification?: { type: string; message?: string }) => void;
+  notificationsHasMore?: boolean;
+  notificationsLoading?: boolean;
+  bellPulse?: boolean;
 }) {
   return (
     <div className="sticky top-0 z-30 border-b border-black/5 bg-white/70 backdrop-blur supports-[backdrop-filter]:bg-white/55">
@@ -435,10 +455,138 @@ function TopBar({
               <input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search inbox…"
                 className="w-full bg-transparent text-sm font-semibold text-zinc-900 outline-none placeholder:text-zinc-400"
               />
             </div>
+          </div>
+          <div className="relative shrink-0">
+            <motion.button
+              type="button"
+              onClick={() => setNotificationsOpen(!notificationsOpen)}
+              className={cn(
+                "relative flex h-10 w-10 items-center justify-center rounded-2xl bg-white/80 ring-1 ring-black/10 backdrop-blur transition hover:bg-white",
+                bellPulseVal && "ring-2 ring-rose-400"
+              )}
+              aria-label="Notifications"
+              animate={bellPulseVal ? { scale: [1, 1.15, 1] } : {}}
+              transition={{ duration: 0.4 }}
+            >
+              <Bell className="h-5 w-5 text-zinc-600" />
+              {notifications.length > 0 && (
+                <span className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-rose-500 text-[10px] font-bold text-white ring-2 ring-white">
+                  {notifications.length > 99 ? "99+" : notifications.length}
+                </span>
+              )}
+            </motion.button>
+            <AnimatePresence>
+              {notificationsOpen && (
+                <>
+                  <div
+                    className="fixed inset-0 z-40"
+                    aria-hidden
+                    onClick={() => setNotificationsOpen(false)}
+                  />
+                  <motion.div
+                    initial={{ opacity: 0, y: -8, scale: 0.96 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: -8, scale: 0.96 }}
+                    transition={{ duration: 0.2 }}
+                    className="absolute right-0 top-full z-50 mt-2 w-[min(380px,92vw)] overflow-hidden rounded-2xl bg-white/95 shadow-xl ring-1 ring-black/10 backdrop-blur"
+                  >
+                    <div className="border-b border-black/5 px-4 py-3 flex items-center justify-between">
+                      <span className="text-sm font-semibold text-zinc-900">Notifications</span>
+                      {notifications.length > 0 && onClearNotifications && (
+                        <button
+                          type="button"
+                          onClick={onClearNotifications}
+                          className="text-xs font-medium text-zinc-500 hover:text-zinc-700"
+                        >
+                          Clear all
+                        </button>
+                      )}
+                    </div>
+                    <div className="max-h-[70vh] overflow-y-auto">
+                      {notifications.length === 0 ? (
+                        <div className="px-4 py-8 text-center text-sm text-zinc-500">
+                          No notifications yet
+                        </div>
+                      ) : (
+                        <ul className="divide-y divide-black/5">
+                          {notifications.map((n) => (
+                            <motion.li
+                              key={n.id}
+                              initial={{ opacity: 0, x: 12 }}
+                              animate={{ opacity: 1, x: 0 }}
+                              transition={{ duration: 0.25 }}
+                              className="px-4 py-3"
+                            >
+                              <div className="flex gap-3">
+                                {n.type === "autonomous_reply" && (
+                                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-600">
+                                    <Bot className="h-4 w-4" />
+                                  </span>
+                                )}
+                                {n.type === "reply_sent" && (
+                                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-blue-500/15 text-blue-600">
+                                    <Mail className="h-4 w-4" />
+                                  </span>
+                                )}
+                                {n.type === "support_detected" && (
+                                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-amber-500/15 text-amber-600">
+                                    <MessageSquare className="h-4 w-4" />
+                                  </span>
+                                )}
+                                {n.type === "human_intervention" && (
+                                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-rose-500/15 text-rose-600">
+                                    <User className="h-4 w-4" />
+                                  </span>
+                                )}
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-sm font-semibold text-zinc-900">{n.title}</p>
+                                  {n.subject && (
+                                    <p className="mt-0.5 truncate text-xs text-zinc-500">{n.subject}</p>
+                                  )}
+                                  {n.message && (
+                                    <p className="mt-0.5 text-xs text-zinc-600">{n.message}</p>
+                                  )}
+                                  <p className="mt-1 text-[10px] text-zinc-400">
+                                    {new Date(n.timestamp).toLocaleString()}
+                                  </p>
+                                  {n.type === "human_intervention" && n.threadId && onNotificationOpenThread && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setNotificationsOpen(false);
+                                        onNotificationOpenThread(n.threadId!, n);
+                                      }}
+                                      className="mt-2 rounded-lg bg-rose-500/10 px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-500/20"
+                                    >
+                                      Open thread
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            </motion.li>
+                          ))}
+                        </ul>
+                      )}
+                      {notificationsHasMore && onLoadMoreNotifications && (
+                        <div className="border-t border-black/5 p-3">
+                          <button
+                            type="button"
+                            onClick={onLoadMoreNotifications}
+                            disabled={notificationsLoading}
+                            className="w-full rounded-xl bg-black/5 px-4 py-2.5 text-sm font-semibold text-zinc-700 transition hover:bg-black/10 disabled:opacity-50"
+                          >
+                            {notificationsLoading ? "Loading…" : "Load more"}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </motion.div>
+                </>
+              )}
+            </AnimatePresence>
           </div>
         </div>
       </div>
@@ -451,6 +599,7 @@ function TopBar({
 const USER_ID_KEY = "autoresolve_user_id";
 const SEEN_SENT_THREADS_KEY_PREFIX = "autoresolve_seen_sent_";
 const AGGRESSIVE_POLLING_KEY = "autoresolve_aggressive_polling";
+const NOTIFICATIONS_PAGE_SIZE = 10;
 const POLL_AGGRESSIVE_MS = 5000;
 const POLL_NORMAL_MS = 30000;
 const AUTO_SEND_COUNTDOWN_SEC = 10;
@@ -474,7 +623,9 @@ export default function DashboardPage() {
 
   const [replyModalOpen, setReplyModalOpen] = useState(false);
   const [replyModalThreadId, setReplyModalThreadId] = useState<string | null>(null);
-  const [replyModalPhase, setReplyModalPhase] = useState<"generating" | "sent" | "draft" | "takeover" | "sending" | "error">("generating");
+  const [replyModalPhase, setReplyModalPhase] = useState<"generating" | "sent" | "draft" | "takeover" | "sending" | "error" | "needs_human" | "human_input">("generating");
+  const [replyModalNeedsHumanReason, setReplyModalNeedsHumanReason] = useState<string | null>(null);
+  const [replyModalContext, setReplyModalContext] = useState("");
   const [replyModalDraft, setReplyModalDraft] = useState("");
   const [replyModalReplyId, setReplyModalReplyId] = useState("");
   const [replyModalSubject, setReplyModalSubject] = useState<string | null>(null);
@@ -482,6 +633,7 @@ export default function DashboardPage() {
   const [replyModalError, setReplyModalError] = useState<string | null>(null);
   const replyAbortRef = useRef<AbortController | null>(null);
   const previousThreadIdsRef = useRef<Set<string>>(new Set());
+  const initialPollDoneRef = useRef(false);
   const seenRepliedThreadIdsRef = useRef<Set<string>>(new Set());
   const [seenRepliedThreadIds, setSeenRepliedThreadIds] = useState<Set<string>>(new Set());
 
@@ -493,6 +645,63 @@ export default function DashboardPage() {
   const [guardrailsReply, setGuardrailsReply] = useState("");
   const [guardrailsSaving, setGuardrailsSaving] = useState(false);
   const [guardrailsLoaded, setGuardrailsLoaded] = useState(false);
+
+  type NotificationType = "autonomous_reply" | "reply_sent" | "support_detected" | "human_intervention";
+  type NotificationItem = {
+    id: string;
+    type: NotificationType;
+    title: string;
+    message?: string;
+    subject?: string;
+    threadId?: string;
+    timestamp: number;
+  };
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [notificationsHasMore, setNotificationsHasMore] = useState(false);
+  const [notificationsLoading, setNotificationsLoading] = useState(false);
+  const [notificationsOffset, setNotificationsOffset] = useState(0);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [bellPulse, setBellPulse] = useState(false);
+  const prevNotificationCountRef = useRef(0);
+  const addNotification = (n: Omit<NotificationItem, "id" | "timestamp">) => {
+    if (!userId) return;
+    createNotification(userId, {
+      type: n.type,
+      title: n.title,
+      message: n.message,
+      subject: n.subject,
+    })
+      .then((item) => {
+        setNotifications((prev) => {
+          const next = [item, ...prev];
+          if (next.length > prevNotificationCountRef.current) {
+            setBellPulse(true);
+            setTimeout(() => setBellPulse(false), 800);
+          }
+          prevNotificationCountRef.current = next.length;
+          return next;
+        });
+      })
+      .catch(() => {});
+  };
+  const loadMoreNotifications = () => {
+    if (!userId || notificationsLoading) return;
+    setNotificationsLoading(true);
+    getNotifications(userId, NOTIFICATIONS_PAGE_SIZE, notificationsOffset)
+      .then((r) => {
+        setNotifications((prev) => [...prev, ...r.notifications]);
+        setNotificationsOffset((o) => o + r.notifications.length);
+        setNotificationsHasMore(r.hasMore);
+      })
+      .catch(() => {})
+      .finally(() => setNotificationsLoading(false));
+  };
+  const clearNotifications = () => {
+    setNotifications([]);
+    setNotificationsOffset(0);
+    setNotificationsHasMore(false);
+    prevNotificationCountRef.current = 0;
+  };
 
   useEffect(() => {
     const uid = searchParams.get("userId");
@@ -565,6 +774,23 @@ export default function DashboardPage() {
     }
   }, [userId]);
 
+  const refetchNotifications = () => {
+    if (!userId) return;
+    getNotifications(userId, NOTIFICATIONS_PAGE_SIZE, 0)
+      .then((r) => {
+        setNotifications(r.notifications);
+        setNotificationsOffset(r.notifications.length);
+        setNotificationsHasMore(r.hasMore);
+        prevNotificationCountRef.current = r.notifications.length;
+      })
+      .catch(() => {});
+  };
+
+  useEffect(() => {
+    if (!userId || !connected) return;
+    refetchNotifications();
+  }, [userId, connected]);
+
   const markThreadSentSeen = (threadId: string) => {
     setSeenRepliedThreadIds((prev) => {
       const next = new Set(prev).add(threadId);
@@ -580,6 +806,11 @@ export default function DashboardPage() {
 
   useEffect(() => {
     if (!userId || !connected) return;
+    initialPollDoneRef.current = false;
+  }, [userId, connected]);
+
+  useEffect(() => {
+    if (!userId || !connected) return;
     const pollMs = aggressivePolling ? POLL_AGGRESSIVE_MS : POLL_NORMAL_MS;
     const fetchData = () => {
       const doFetch = () => {
@@ -589,6 +820,20 @@ export default function DashboardPage() {
               .then((r) => {
                 const threads = r.threads;
                 const prevIds = previousThreadIdsRef.current;
+                const isFirstPoll = !initialPollDoneRef.current;
+                if (isFirstPoll) {
+                  initialPollDoneRef.current = true;
+                  previousThreadIdsRef.current = new Set(threads.map((t) => t.threadId));
+                  setApiThreads(threads);
+                  const replied = threads.filter((t) => t.status === "replied");
+                  const seen = seenRepliedThreadIdsRef.current;
+                  const newReplied = replied.find((t) => !seen.has(t.threadId));
+                  if (newReplied) {
+                    markThreadSentSeen(newReplied.threadId);
+                    setTimeout(() => openReplyModalWithSent(newReplied.threadId, newReplied.subject ?? null), 150);
+                  }
+                  return;
+                }
                 const newThreads = threads.filter((t) => !prevIds.has(t.threadId));
                 previousThreadIdsRef.current = new Set(threads.map((t) => t.threadId));
                 setApiThreads(threads);
@@ -601,7 +846,7 @@ export default function DashboardPage() {
                 } else if (newThreads.length > 0) {
                   const pending = newThreads.find((t) => t.status === "pending" || t.status === "processing");
                   const toOpen = pending ?? newThreads[0];
-                  setTimeout(() => openReplyModalForNewEmail(toOpen.threadId), 150);
+                  setTimeout(() => openReplyModalForNewEmail(toOpen.threadId, toOpen.subject ?? null), 150);
                 }
               })
               .catch(() => {});
@@ -611,9 +856,13 @@ export default function DashboardPage() {
           getThreads(userId!)
             .then((r) => {
               const threads = r.threads;
-              const seen = seenRepliedThreadIdsRef.current;
+              const isFirstPoll = !initialPollDoneRef.current;
+              if (isFirstPoll) {
+                initialPollDoneRef.current = true;
+              }
               previousThreadIdsRef.current = new Set(threads.map((t) => t.threadId));
               setApiThreads(threads);
+              const seen = seenRepliedThreadIdsRef.current;
               const newReplied = threads.find((t) => t.status === "replied" && !seen.has(t.threadId));
               if (newReplied) {
                 markThreadSentSeen(newReplied.threadId);
@@ -657,6 +906,12 @@ export default function DashboardPage() {
         .then(() => {
           setReplyModalPhase("sent");
           markThreadSentSeen(replyModalThreadId!);
+          addNotification({
+            type: "reply_sent",
+            title: "Reply sent",
+            message: "Your reply was sent.",
+            subject: replyModalSubject ?? undefined,
+          });
           getReplies(userId!).then((r) => setApiReplies(r.replies)).catch(() => {});
         })
         .catch((e) => {
@@ -729,10 +984,22 @@ export default function DashboardPage() {
     setReplyModalEditedContent("");
     setReplyCountdownSec(null);
     markThreadSentSeen(threadId);
+    addNotification({
+      type: "autonomous_reply",
+      title: "Reply sent",
+      message: "Your reply was sent automatically.",
+      subject: subject ?? undefined,
+    });
   };
 
-  const openReplyModalForNewEmail = (threadId: string) => {
+  const openReplyModalForNewEmail = (threadId: string, subject?: string | null) => {
     if (!userId) return;
+    addNotification({
+      type: "support_detected",
+      title: "Support email detected",
+      message: "Generating reply…",
+      subject: subject ?? undefined,
+    });
     if (countdownIntervalRef.current) {
       clearInterval(countdownIntervalRef.current);
       countdownIntervalRef.current = null;
@@ -748,10 +1015,22 @@ export default function DashboardPage() {
     setReplyModalReplyId("");
     setReplyModalSubject(null);
     setReplyModalEditedContent("");
+    setReplyModalNeedsHumanReason(null);
     setReplyCountdownSec(AUTO_SEND_COUNTDOWN_SEC);
     generateReplyForThread(userId, threadId, { signal })
       .then((result) => {
-        if (result.sent) {
+        if ("needsHuman" in result && result.needsHuman) {
+          setReplyModalPhase("needs_human");
+          setReplyModalNeedsHumanReason(result.reason ?? "Human intervention needed.");
+          setReplyCountdownSec(null);
+          if (countdownIntervalRef.current) {
+            clearInterval(countdownIntervalRef.current);
+            countdownIntervalRef.current = null;
+          }
+          refetchNotifications();
+          return;
+        }
+        if ("sent" in result && result.sent) {
           setReplyModalPhase("sent");
           setReplyCountdownSec(null);
           if (countdownIntervalRef.current) {
@@ -759,7 +1038,7 @@ export default function DashboardPage() {
             countdownIntervalRef.current = null;
           }
           markThreadSentSeen(threadId);
-        } else {
+        } else if ("draft" in result) {
           setReplyModalPhase("draft");
           setReplyModalDraft(result.draft);
           setReplyModalReplyId(result.replyId);
@@ -791,10 +1070,22 @@ export default function DashboardPage() {
     setReplyModalReplyId("");
     setReplyModalSubject(null);
     setReplyModalEditedContent("");
+    setReplyModalNeedsHumanReason(null);
     setReplyCountdownSec(AUTO_SEND_COUNTDOWN_SEC);
     generateReplyForThread(userId, threadId, { signal })
       .then((result) => {
-        if (result.sent) {
+        if ("needsHuman" in result && result.needsHuman) {
+          setReplyModalPhase("needs_human");
+          setReplyModalNeedsHumanReason(result.reason ?? "Human intervention needed.");
+          setReplyCountdownSec(null);
+          if (countdownIntervalRef.current) {
+            clearInterval(countdownIntervalRef.current);
+            countdownIntervalRef.current = null;
+          }
+          refetchNotifications();
+          return;
+        }
+        if ("sent" in result && result.sent) {
           setReplyModalPhase("sent");
           setReplyCountdownSec(null);
           if (countdownIntervalRef.current) {
@@ -802,7 +1093,13 @@ export default function DashboardPage() {
             countdownIntervalRef.current = null;
           }
           markThreadSentSeen(threadId);
-        } else {
+          addNotification({
+            type: "autonomous_reply",
+            title: "Reply sent",
+            message: "Your reply was sent automatically.",
+            subject: replyModalSubject ?? undefined,
+          });
+        } else if ("draft" in result) {
           setReplyModalPhase("draft");
           setReplyModalDraft(result.draft);
           setReplyModalReplyId(result.replyId);
@@ -829,14 +1126,22 @@ export default function DashboardPage() {
     setReplyModalError(null);
     generateReplyForThread(userId, replyModalThreadId, { takeOver: true })
       .then((result) => {
-        if (result.sent) return;
-        setReplyModalPhase("draft");
-        setReplyModalDraft(result.draft);
-        setReplyModalReplyId(result.replyId);
-        setReplyModalSubject(result.subject);
+        if ("needsHuman" in result && result.needsHuman) {
+          setReplyModalPhase("needs_human");
+          setReplyModalNeedsHumanReason(result.reason ?? "Human intervention needed.");
+          return;
+        }
+        if ("sent" in result && result.sent) return;
+        if ("draft" in result) {
+          setReplyModalPhase("takeover");
+          setReplyModalDraft(result.draft);
+          setReplyModalEditedContent(result.draft);
+          setReplyModalReplyId(result.replyId);
+          setReplyModalSubject(result.subject);
+        }
       })
       .catch((e) => {
-        setReplyModalPhase("error");
+        setReplyModalPhase("needs_human");
         setReplyModalError(e instanceof Error ? e.message : String(e));
       });
   };
@@ -851,9 +1156,62 @@ export default function DashboardPage() {
     setReplyModalThreadId(null);
     setReplyModalPhase("generating");
     setReplyModalError(null);
+    setReplyModalNeedsHumanReason(null);
+    setReplyModalContext("");
     setReplyModalDraft("");
     setReplyModalReplyId("");
     setReplyModalEditedContent("");
+  };
+
+  const openThreadForHumanIntervention = (threadId: string, reason?: string | null) => {
+    if (countdownIntervalRef.current) {
+      clearInterval(countdownIntervalRef.current);
+      countdownIntervalRef.current = null;
+    }
+    setReplyCountdownSec(null);
+    setReplyModalOpen(true);
+    setReplyModalThreadId(threadId);
+    setReplyModalPhase("human_input");
+    setReplyModalNeedsHumanReason(reason ?? "Human intervention needed.");
+    setReplyModalContext("");
+    setReplyModalError(null);
+    setReplyModalDraft("");
+    setReplyModalReplyId("");
+    setReplyModalSubject(null);
+    setReplyModalEditedContent("");
+  };
+
+  const handleGenerateWithContext = () => {
+    if (!userId || !replyModalThreadId) return;
+    setReplyModalPhase("generating");
+    setReplyModalError(null);
+    generateReplyForThread(userId, replyModalThreadId, {
+      takeOver: true,
+      context: replyModalContext.trim() || undefined,
+    })
+      .then((result) => {
+        if ("needsHuman" in result && result.needsHuman) {
+          setReplyModalPhase("needs_human");
+          setReplyModalNeedsHumanReason(result.reason ?? "Human intervention needed.");
+          return;
+        }
+        if ("sent" in result && result.sent) {
+          setReplyModalPhase("sent");
+          markThreadSentSeen(replyModalThreadId);
+          refetchNotifications();
+          return;
+        }
+        if ("draft" in result) {
+          setReplyModalPhase("draft");
+          setReplyModalDraft(result.draft);
+          setReplyModalReplyId(result.replyId);
+          setReplyModalSubject(result.subject);
+        }
+      })
+      .catch((e) => {
+        setReplyModalPhase("human_input");
+        setReplyModalError(e instanceof Error ? e.message : String(e));
+      });
   };
 
   const handleTakeOver = () => {
@@ -868,6 +1226,13 @@ export default function DashboardPage() {
     try {
       await approveReply(userId, replyModalReplyId, replyModalEditedContent);
       setReplyModalPhase("sent");
+      markThreadSentSeen(replyModalThreadId!);
+      addNotification({
+        type: "reply_sent",
+        title: "Reply sent",
+        message: "Your edited reply was sent.",
+        subject: replyModalSubject ?? undefined,
+      });
       getReplies(userId).then((r) => setApiReplies(r.replies)).catch(() => {});
     } catch (e) {
       setReplyModalPhase("takeover");
@@ -964,7 +1329,25 @@ export default function DashboardPage() {
         />
 
         <main className="min-w-0 flex-1">
-          <TopBar query={query} setQuery={setQuery} />
+          <TopBar
+            query={query}
+            setQuery={setQuery}
+            notifications={notifications}
+            notificationsOpen={notificationsOpen}
+            setNotificationsOpen={setNotificationsOpen}
+            onClearNotifications={clearNotifications}
+            onLoadMoreNotifications={loadMoreNotifications}
+            onNotificationOpenThread={(threadId, notification) => {
+              if (notification?.type === "human_intervention") {
+                openThreadForHumanIntervention(threadId, notification.message);
+              } else {
+                openReplyModal(threadId);
+              }
+            }}
+            notificationsHasMore={notificationsHasMore}
+            notificationsLoading={notificationsLoading}
+            bellPulse={bellPulse}
+          />
 
           {errorBanner ? (
             <div className="mx-auto max-w-[1400px] px-4 pt-4 sm:px-6">
@@ -1193,7 +1576,6 @@ export default function DashboardPage() {
                           <textarea
                             value={guardrailsTrigger}
                             onChange={(e) => setGuardrailsTrigger(e.target.value)}
-                            placeholder="e.g. Only respond to emails that look like customer support requests or questions about orders, refunds, or account issues."
                             className="mt-2 w-full rounded-2xl border-0 bg-white/80 px-4 py-3 text-sm text-zinc-800 ring-1 ring-black/10 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-400"
                             rows={3}
                           />
@@ -1208,7 +1590,6 @@ export default function DashboardPage() {
                           <textarea
                             value={guardrailsReply}
                             onChange={(e) => setGuardrailsReply(e.target.value)}
-                            placeholder="e.g. Be concise and friendly. Always include a clear next step. Sign off with first name only."
                             className="mt-2 w-full rounded-2xl border-0 bg-white/80 px-4 py-3 text-sm text-zinc-800 ring-1 ring-black/10 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-400"
                             rows={4}
                           />
@@ -1319,7 +1700,7 @@ export default function DashboardPage() {
 
       <AnimatePresence>
         {syncModalOpen ? (
-          <>
+          <Fragment key="sync-modal">
             <motion.div
               className="fixed inset-0 z-40 bg-black/25"
               initial={{ opacity: 0 }}
@@ -1372,10 +1753,10 @@ export default function DashboardPage() {
                 )}
               </div>
             </motion.div>
-          </>
+          </Fragment>
         ) : null}
         {replyModalOpen ? (
-          <>
+          <Fragment key="reply-modal">
             <motion.div
               className="fixed inset-0 z-40 bg-black/30 backdrop-blur-sm"
               initial={{ opacity: 0 }}
@@ -1433,9 +1814,11 @@ export default function DashboardPage() {
                           {replyModalPhase === "sent" && "Sent"}
                           {replyModalPhase === "draft" && "Draft ready"}
                           {replyModalPhase === "takeover" && "Edit & send"}
+                          {replyModalPhase === "needs_human" && "Human intervention needed"}
+                          {replyModalPhase === "human_input" && "What does the AI need to know?"}
                           {replyModalPhase === "error" && "Error"}
                         </div>
-                        {replyModalSubject && replyModalPhase !== "generating" && replyModalPhase !== "sending" && (
+                        {replyModalSubject && replyModalPhase !== "generating" && replyModalPhase !== "sending" && replyModalPhase !== "human_input" && (
                           <div className="mt-0.5 truncate text-xs text-zinc-600">{replyModalSubject}</div>
                         )}
                       </div>
@@ -1450,6 +1833,64 @@ export default function DashboardPage() {
                     <X className="h-5 w-5" />
                   </button>
                 </div>
+
+                {replyModalPhase === "human_input" && (
+                  <div className="mt-5 flex flex-col gap-4">
+                    <p className="text-sm text-zinc-700">
+                      {replyModalNeedsHumanReason}
+                    </p>
+                    <p className="text-xs text-zinc-500">
+                      Tell the AI what it needs to know so it can generate a reply (e.g. &quot;We received their document. Refund is processed.&quot;). Then it will generate and can send autonomously.
+                    </p>
+                    <textarea
+                      value={replyModalContext}
+                      onChange={(e) => setReplyModalContext(e.target.value)}
+                      placeholder="e.g. We received the document. Refund is processed."
+                      className="min-h-[100px] w-full rounded-2xl border-0 bg-white/80 px-4 py-3 text-sm text-zinc-800 ring-1 ring-black/10 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-400"
+                      rows={3}
+                    />
+                    {replyModalError && (
+                      <p className="text-xs text-rose-600">{replyModalError}</p>
+                    )}
+                    <button
+                      type="button"
+                      onClick={handleGenerateWithContext}
+                      className="w-full rounded-2xl px-4 py-3 text-sm font-semibold text-white transition hover:opacity-90"
+                      style={{ background: `linear-gradient(90deg, ${BRAND.a}, ${BRAND.b})` }}
+                    >
+                      Generate reply
+                    </button>
+                  </div>
+                )}
+
+                {replyModalPhase === "needs_human" && (
+                  <div className="mt-5 flex flex-col gap-4">
+                    <p className="text-sm text-zinc-700">
+                      {replyModalNeedsHumanReason}
+                    </p>
+                    <p className="text-xs text-zinc-500">
+                      You can add context above and generate again, or take over to write a reply yourself.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setReplyModalPhase("human_input");
+                        setReplyModalError(null);
+                      }}
+                      className="w-full rounded-2xl border-2 border-zinc-300 px-4 py-3 text-sm font-semibold text-zinc-700 transition hover:border-zinc-400 hover:bg-white/50"
+                    >
+                      Add context & generate
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleTakeOverDuringGenerate}
+                      className="w-full rounded-2xl px-4 py-3 text-sm font-semibold text-white transition hover:opacity-90"
+                      style={{ background: `linear-gradient(90deg, ${BRAND.a}, ${BRAND.b})` }}
+                    >
+                      Take over — write reply
+                    </button>
+                  </div>
+                )}
 
                 {(replyModalPhase === "generating" || replyModalPhase === "sending") && (
                   <div className="mt-5 flex flex-col gap-4">
@@ -1533,21 +1974,24 @@ export default function DashboardPage() {
                       </>
                     ) : (
                       <>
+                        <label className="block text-sm font-semibold text-zinc-800">
+                          Edit your reply
+                        </label>
                         <textarea
                           value={replyModalEditedContent}
                           onChange={(e) => setReplyModalEditedContent(e.target.value)}
-                          className="w-full max-h-48 rounded-2xl border-0 bg-white/80 p-4 text-sm text-zinc-800 ring-1 ring-black/10 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-400"
-                          placeholder="Edit your reply…"
-                          rows={6}
+                          placeholder="Type your reply…"
+                          className="min-h-[160px] w-full rounded-2xl border-0 bg-white/90 p-4 text-sm leading-relaxed text-zinc-800 shadow-sm ring-1 ring-black/10 placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-400 focus:ring-offset-2"
+                          rows={8}
                         />
                         {replyModalError && (
-                          <p className="text-sm text-red-600">{replyModalError}</p>
+                          <p className="text-sm text-rose-600">{replyModalError}</p>
                         )}
-                        <div className="flex gap-2">
+                        <div className="flex gap-3">
                           <button
                             type="button"
                             onClick={closeReplyModal}
-                            className="flex-1 rounded-2xl bg-zinc-100 px-4 py-3 text-sm font-semibold text-zinc-700 hover:bg-zinc-200"
+                            className="flex-1 rounded-2xl bg-zinc-100 px-4 py-3 text-sm font-semibold text-zinc-700 transition hover:bg-zinc-200"
                           >
                             Cancel
                           </button>
@@ -1555,7 +1999,7 @@ export default function DashboardPage() {
                             type="button"
                             onClick={handleSendEditedReply}
                             disabled={!replyModalEditedContent.trim()}
-                            className="flex-1 rounded-2xl px-4 py-3 text-sm font-semibold text-white transition disabled:opacity-50"
+                            className="flex-1 rounded-2xl px-4 py-3 text-sm font-semibold text-white shadow-md transition hover:opacity-95 disabled:opacity-50 disabled:shadow-none"
                             style={{ background: `linear-gradient(90deg, ${BRAND.a}, ${BRAND.b})` }}
                           >
                             Send
@@ -1592,7 +2036,7 @@ export default function DashboardPage() {
                 )}
               </div>
             </motion.div>
-          </>
+          </Fragment>
         ) : null}
       </AnimatePresence>
     </div>
