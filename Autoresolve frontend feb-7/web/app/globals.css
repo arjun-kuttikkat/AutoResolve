@@ -1,0 +1,51 @@
+@import "tailwindcss";
+@config "../tailwind.config.ts";
+
+:root {
+  color-scheme: light;
+  --surface: 244 247 252;
+  --panel: 255 255 255;
+  --panel-border: 227 232 240;
+  --text: 9 17 34;
+  --muted: 89 102 123;
+  --brand: 36 94 255;
+  --brand-soft: 226 235 255;
+  --accent: 20 191 158;
+  --glow: 140 195 255;
+}
+
+* {
+  border-color: rgb(var(--panel-border));
+}
+
+html {
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+}
+
+body {
+  min-height: 100vh;
+  background-color: rgb(var(--surface));
+}
+
+::selection {
+  background: rgb(var(--brand) / 0.15);
+}
+
+@layer components {
+  .glass-panel {
+    background: linear-gradient(135deg, rgba(255, 255, 255, 0.95), rgba(255, 255, 255, 0.7));
+    backdrop-filter: blur(26px);
+    box-shadow: 0 20px 50px -30px rgba(8, 15, 32, 0.45);
+  }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    border-radius: 999px;
+    padding: 0.25rem 0.75rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+  }
+}
