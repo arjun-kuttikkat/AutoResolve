@@ -10,7 +10,7 @@ function getUserId(req: Request): string | null {
 // Create a new case from a thread
 router.post("/", async (req: Request, res: Response) => {
     const userId = getUserId(req);
-    const { threadId, merchantName, issueDescription, desiredOutcome } = req.body;
+    const { threadId, merchantName, issueDescription, desiredOutcome, mode } = req.body;
 
     if (!userId || !threadId) {
         return res.status(400).json({ error: "userId and threadId required" });
@@ -21,6 +21,7 @@ router.post("/", async (req: Request, res: Response) => {
             merchantName,
             issueDescription,
             desiredOutcome,
+            mode,
         });
         return res.json({ case: newCase });
     } catch (err) {
@@ -46,7 +47,7 @@ router.get("/", async (req: Request, res: Response) => {
 // Get case details for a specific thread
 router.get("/thread/:threadId", async (req: Request, res: Response) => {
     const userId = getUserId(req);
-    const { threadId } = req.params;
+    const threadId = req.params.threadId as string;
 
     if (!userId || !threadId) {
         return res.status(400).json({ error: "userId and threadId required" });
@@ -67,7 +68,7 @@ router.get("/thread/:threadId", async (req: Request, res: Response) => {
 // Resolve a case
 router.patch("/:caseId/resolve", async (req: Request, res: Response) => {
     const userId = getUserId(req);
-    const { caseId } = req.params;
+    const caseId = req.params.caseId as string;
 
     if (!userId || !caseId) {
         return res.status(400).json({ error: "userId and caseId required" });

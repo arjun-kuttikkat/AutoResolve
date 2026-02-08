@@ -11,7 +11,7 @@ import {
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
-export const userModeEnum = ["auto", "approval"] as const;
+export const userModeEnum = ["auto", "manual"] as const;
 export const threadStatusEnum = ["pending", "processing", "replied", "resolved"] as const;
 export const replyStatusEnum = ["draft", "sent", "failed"] as const;
 
@@ -34,7 +34,7 @@ export const users = pgTable(
     lastHistoryId: varchar("last_history_id", { length: 64 }),
     watchEnabled: boolean("watch_enabled").default(false),
     watchExpiresAt: timestamp("watch_expires_at", { withTimezone: true }),
-    mode: varchar("mode", { length: 32 }).default("approval").$type<"auto" | "approval">(),
+    mode: varchar("mode", { length: 32 }).default("manual").$type<"auto" | "manual">(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
@@ -55,7 +55,7 @@ export const oauthTokens = pgTable("oauth_tokens", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
 });
 
-export const caseStatusEnum = ["open", "resolved"] as const;
+export const caseStatusEnum = ["draft", "sent", "open", "resolved"] as const;
 
 export const cases = pgTable(
   "cases",
@@ -70,7 +70,10 @@ export const cases = pgTable(
     desiredOutcome: text("desired_outcome"),
     status: varchar("status", { length: 32 })
       .default("open")
-      .$type<"open" | "resolved">(),
+      .$type<"draft" | "sent" | "open" | "resolved">(),
+    mode: varchar("mode", { length: 32 }).default("manual").$type<"auto" | "manual">(),
+    nextAction: text("next_action"),
+    lastAction: text("last_action"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },

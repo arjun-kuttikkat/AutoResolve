@@ -23,11 +23,15 @@ import {
   getGuardrails,
   setGuardrails,
   getCases,
+  getNotifications,
+  createNotification,
+  type NotificationPayload,
+  type Case,
 } from "@/lib/api";
 import { Logo } from "@/components/Logo";
 import { ReplySettingsDrawer } from "@/components/inbox/ReplySettingsDrawer";
 import { ThreadDetailView } from "@/components/inbox/ThreadDetailView";
-import { CaseList, type CaseItem } from "@/components/inbox/CaseList";
+import { CaseList } from "@/components/inbox/CaseList";
 import { PotentialCaseList, type PotentialCaseItem } from "@/components/inbox/PotentialCaseList";
 import { CreateCaseModal } from "@/components/inbox/CreateCaseModal";
 import {
@@ -505,9 +509,21 @@ function Sidebar({
 function TopBar({
   query,
   setQuery,
+  notifications = [],
+  notificationsOpen,
+  setNotificationsOpen,
+  onClearNotifications,
+  onNotificationClick,
+  bellPulse,
 }: {
   query: string;
   setQuery: (v: string) => void;
+  notifications?: NotificationPayload[];
+  notificationsOpen?: boolean;
+  setNotificationsOpen?: (open: boolean) => void;
+  onClearNotifications?: () => void;
+  onNotificationClick?: (n: NotificationPayload) => void;
+  bellPulse?: boolean;
 }) {
   return (
     <div className="sticky top-0 z-30 border-b border-black/5 bg-white/70 backdrop-blur supports-[backdrop-filter]:bg-white/55">
@@ -523,6 +539,89 @@ function TopBar({
                 className="w-full bg-transparent text-sm font-semibold text-zinc-900 outline-none placeholder:text-zinc-400"
               />
             </div>
+          </div>
+
+          <div className="relative">
+            <button
+              onClick={() => setNotificationsOpen?.(!notificationsOpen)}
+              className={cn(
+                "group relative inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-white/70 ring-1 ring-black/10 hover:bg-white transition",
+                bellPulse && "animate-pulse ring-indigo-500 ring-2"
+              )}
+            >
+              <Bell className={cn("h-5 w-5 text-zinc-600 transition", bellPulse && "text-indigo-600")} />
+              {notifications.length > 0 && (
+                <span className="absolute right-3 top-3 h-2 w-2 rounded-full bg-red-500 ring-2 ring-white" />
+              )}
+            </button>
+
+            <AnimatePresence>
+              {notificationsOpen && (
+                <motion.div
+                  initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                  className="absolute right-0 top-14 z-50 w-80 origin-top-right overflow-hidden rounded-3xl bg-white shadow-[0_20px_40px_-5px_rgba(0,0,0,0.15)] ring-1 ring-black/5"
+                >
+                  <div className="flex items-center justify-between border-b border-zinc-100 px-4 py-3 bg-zinc-50/50">
+                    <span className="text-xs font-bold uppercase tracking-wider text-zinc-500">Notifications</span>
+                    {notifications.length > 0 && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onClearNotifications?.();
+                        }}
+                        className="text-xs font-semibold text-zinc-400 hover:text-zinc-600"
+                      >
+                        Clear all
+                      </button>
+                    )}
+                  </div>
+                  <div className="max-h-[400px] overflow-y-auto">
+                    {notifications.length === 0 ? (
+                      <div className="flex flex-col items-center py-8 text-center">
+                        <div className="rounded-full bg-zinc-50 p-3 mb-2">
+                          <Bell className="h-5 w-5 text-zinc-300" />
+                        </div>
+                        <p className="text-sm font-medium text-zinc-900">All caught up</p>
+                        <p className="text-xs text-zinc-500">No new notifications</p>
+                      </div>
+                    ) : (
+                      <div className="divide-y divide-zinc-50">
+                        {notifications.map((n) => (
+                          <button
+                            key={n.id}
+                            onClick={() => onNotificationClick?.(n)}
+                            className="w-full px-4 py-3 text-left transition hover:bg-zinc-50 flex gap-3 group"
+                          >
+                            <div className="mt-1 flex-shrink-0">
+                              {n.type === "autonomous_reply" || n.type === "reply_sent" ? (
+                                <div className="h-8 w-8 rounded-full bg-green-100 flex items-center justify-center text-green-600">
+                                  <CheckCircle2 className="h-4 w-4" />
+                                </div>
+                              ) : n.type === "support_detected" ? (
+                                <div className="h-8 w-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-600">
+                                  <Bot className="h-4 w-4" />
+                                </div>
+                              ) : (
+                                <div className="h-8 w-8 rounded-full bg-amber-100 flex items-center justify-center text-amber-600">
+                                  <Settings className="h-4 w-4" />
+                                </div>
+                              )}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-semibold text-zinc-900 group-hover:text-indigo-600 transition">{n.title}</p>
+                              <p className="text-xs text-zinc-500 line-clamp-2">{n.message || n.subject}</p>
+                              <p className="mt-1 text-[10px] text-zinc-400">{new Date(n.timestamp).toLocaleTimeString()}</p>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
         </div>
       </div>
@@ -555,7 +654,7 @@ export default function DashboardPage() {
 
   // Case Management State
   const [activeCaseTab, setActiveCaseTab] = useState<"potential" | "active">("potential");
-  const [activeCases, setActiveCases] = useState<CaseItem[]>([]);
+  const [activeCases, setActiveCases] = useState<Case[]>([]);
   const [loadingCases, setLoadingCases] = useState(false);
 
   const [disconnecting, setDisconnecting] = useState(false);
@@ -587,9 +686,19 @@ export default function DashboardPage() {
 
   const [guardrailsLoaded, setGuardrailsLoaded] = useState(false);
 
+  // Notifications State
+  const [notifications, setNotifications] = useState<NotificationPayload[]>([]);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [bellPulse, setBellPulse] = useState(false);
+  const prevNotificationCountRef = useRef(0);
+
   // Create Case Modal State
   const [createCaseModalOpen, setCreateCaseModalOpen] = useState(false);
   const [createCaseThreadId, setCreateCaseThreadId] = useState<string | null>(null);
+
+  // Tracking for notifications
+  const threadTimestampsRef = useRef<Map<string, number>>(new Map());
+  const initialLoadCompleteRef = useRef(false);
 
   // New Workflow State
   const [threadDetailId, setThreadDetailId] = useState<string | null>(null);
@@ -696,20 +805,60 @@ export default function DashboardPage() {
           getThreads(userId!)
             .then((r) => {
               const threads = r.threads;
-              const prevIds = previousThreadIdsRef.current;
-              const newThreads = threads.filter((t) => !prevIds.has(t.threadId));
-              previousThreadIdsRef.current = new Set(threads.map((t) => t.threadId));
+              const timestampMap = threadTimestampsRef.current;
+
+              // Detect new threads (Potential Case) or updates (New Reply)
+              // Only notify if potential cases/replies arrive AFTER the initial load.
+
+              threads.forEach((t) => {
+                const lastUpdate = t.updatedAt ? new Date(t.updatedAt).getTime() : 0;
+                const prevUpdate = timestampMap.get(t.threadId);
+
+                if (!prevUpdate) {
+                  // New Thread Found
+                  timestampMap.set(t.threadId, lastUpdate);
+                  if (initialLoadCompleteRef.current) {
+                    addNotification({
+                      type: "support_detected",
+                      title: "New Potential Case",
+                      message: t.subject ?? "New email requiring attention",
+                      subject: t.subject ?? "No Subject",
+                      threadId: t.threadId
+                    });
+                  }
+                } else if (lastUpdate > prevUpdate) {
+                  // Thread Updated (New Reply)
+                  timestampMap.set(t.threadId, lastUpdate);
+                  // Check if it's from a user/merchant (not us)
+                  if (t.status === 'pending' || t.status === 'human_needed') {
+                    addNotification({
+                      type: "human_intervention",
+                      title: t.caseId ? "New Reply on Case" : "New Reply on Potential Case",
+                      message: t.subject ?? "New message received",
+                      subject: t.subject ?? "No Subject",
+                      threadId: t.threadId
+                    });
+                  }
+                }
+              });
+
+              initialLoadCompleteRef.current = true;
               setApiThreads(threads);
+
+              // Check for sent replies logic (keep existing checks if needed, but remove auto-modal)
               const replied = threads.filter((t) => t.status === "replied");
               const seen = seenRepliedThreadIdsRef.current;
               const newReplied = replied.find((t) => !seen.has(t.threadId));
               if (newReplied) {
                 markThreadSentSeen(newReplied.threadId);
-                setTimeout(() => openReplyModalWithSent(newReplied.threadId, newReplied.subject ?? null), 150);
-              } else if (newThreads.length > 0) {
-                const pending = newThreads.find((t) => t.status === "pending" || t.status === "processing");
-                const toOpen = pending ?? newThreads[0];
-                setTimeout(() => openReplyModalForNewEmail(toOpen.threadId), 150);
+                // Notify instead of modal
+                addNotification({
+                  type: "reply_sent",
+                  title: "Reply Sent",
+                  message: "A reply was successfully sent.",
+                  subject: newReplied.subject ?? "Reply Sent",
+                  threadId: newReplied.threadId
+                });
               }
             })
             .catch(() => { });
@@ -720,13 +869,52 @@ export default function DashboardPage() {
         getThreads(userId!)
           .then((r) => {
             const threads = r.threads;
-            const seen = seenRepliedThreadIdsRef.current;
-            previousThreadIdsRef.current = new Set(threads.map((t) => t.threadId));
+            const timestampMap = threadTimestampsRef.current;
+
+            threads.forEach((t) => {
+              const lastUpdate = t.updatedAt ? new Date(t.updatedAt).getTime() : 0;
+              const prevUpdate = timestampMap.get(t.threadId);
+
+              if (!prevUpdate) {
+                // New Thread Found
+                timestampMap.set(t.threadId, lastUpdate);
+                if (initialLoadCompleteRef.current) {
+                  addNotification({
+                    type: "support_detected",
+                    title: "New Potential Case",
+                    message: t.subject ?? "New email requiring attention",
+                    subject: t.subject ?? "No Subject",
+                    threadId: t.threadId
+                  });
+                }
+              } else if (lastUpdate > prevUpdate) {
+                // Thread Updated (New Reply)
+                timestampMap.set(t.threadId, lastUpdate);
+                if (t.status === 'pending' || t.status === 'human_needed') {
+                  addNotification({
+                    type: "human_intervention",
+                    title: t.caseId ? "New Reply on Case" : "New Reply on Potential Case",
+                    message: t.subject ?? "New message received",
+                    subject: t.subject ?? "No Subject",
+                    threadId: t.threadId
+                  });
+                }
+              }
+            });
+
+            initialLoadCompleteRef.current = true;
             setApiThreads(threads);
+            const seen = seenRepliedThreadIdsRef.current;
             const newReplied = threads.find((t) => t.status === "replied" && !seen.has(t.threadId));
             if (newReplied) {
               markThreadSentSeen(newReplied.threadId);
-              setTimeout(() => openReplyModalWithSent(newReplied.threadId, newReplied.subject ?? null), 150);
+              addNotification({
+                type: "reply_sent",
+                title: "Reply Sent",
+                message: "A reply was successfully sent.",
+                subject: newReplied.subject ?? "Reply Sent",
+                threadId: newReplied.threadId
+              });
             }
           })
           .catch(() => { });
@@ -790,6 +978,28 @@ export default function DashboardPage() {
     const url = getGmailAuthUrl(userId ?? undefined);
     window.location.href = url;
   };
+
+  const refetchNotifications = () => {
+    if (!userId) return;
+    getNotifications(userId)
+      .then((r) => {
+        setNotifications(r.notifications);
+        if (r.notifications.length > prevNotificationCountRef.current) {
+          setBellPulse(true);
+          setTimeout(() => setBellPulse(false), 800);
+        }
+        prevNotificationCountRef.current = r.notifications.length;
+      })
+      .catch(() => { });
+  };
+
+  useEffect(() => {
+    if (!userId || !connected) return;
+    refetchNotifications();
+    // Poll for notifications
+    const t = setInterval(refetchNotifications, 10000);
+    return () => clearInterval(t);
+  }, [userId, connected]);
 
   const handleSyncInbox = async () => {
     if (!userId) return;
@@ -1065,6 +1275,60 @@ export default function DashboardPage() {
     }
   };
 
+  const addNotification = (n: Omit<NotificationPayload, "id" | "timestamp">) => {
+    if (!userId) return;
+    createNotification(userId, n)
+      .then((item) => {
+        setNotifications((prev) => [item, ...prev]);
+        setBellPulse(true);
+        setTimeout(() => setBellPulse(false), 800);
+      })
+      .catch(() => { });
+  };
+
+  const openThreadForHumanIntervention = (threadId: string, reason?: string | null) => {
+    if (countdownIntervalRef.current) {
+      clearInterval(countdownIntervalRef.current);
+      countdownIntervalRef.current = null;
+    }
+    setReplyCountdownSec(null);
+    setReplyModalOpen(true);
+    setReplyModalThreadId(threadId);
+    // "takeover" allows the user to manually edit/send.
+    // We don't have "human_input" phase or extra context states in this MVP version.
+    setReplyModalPhase("takeover");
+    setReplyModalError(reason ?? "Human intervention needed."); // Show reason as error/message
+    setReplyModalDraft("");
+    setReplyModalReplyId("");
+    setReplyModalSubject(null);
+    setReplyModalEditedContent("");
+  };
+
+  const handleNotificationClick = (n: NotificationPayload) => {
+    setNotificationsOpen(false);
+    // Logic for redirection
+    if (n.type === "support_detected") {
+      setActiveCaseTab("potential");
+      // If we have a threadId, open the reply modal (draft generation)
+      if (n.threadId) openReplyModal(n.threadId);
+    } else if (n.type === "autonomous_reply" || n.type === "reply_sent") {
+      setActiveCaseTab("potential"); // or active? usually potential if not a case yet.
+      if (n.threadId) {
+        // Just show thread detail? Or open reply modal in "sent" state?
+        // openReplyModalWithSent exists?
+        // I don't see openReplyModalWithSent in step 212 view.
+        // I only see openReplyModal and openReplyModalForNewEmail.
+        // I'll check for openReplyModalWithSent in step 166 (feb-8 code) vs mine.
+        // Mine (Step 212) doesn't show it.
+        // I'll just open the thread detail view.
+        setThreadDetailId(n.threadId);
+      }
+    } else if (n.type === "human_intervention") {
+      setActiveCaseTab("active"); // Likely active or high priority
+      if (n.threadId) openThreadForHumanIntervention(n.threadId, n.message);
+    }
+  };
+
   const handleModeChange = async (mode: "auto" | "approval") => {
     if (!userId) return;
     setUserModeState(mode);
@@ -1147,7 +1411,16 @@ export default function DashboardPage() {
           }}
         />
         <main className="min-w-0 flex-1">
-          <TopBar query={query} setQuery={setQuery} />
+          <TopBar
+            query={query}
+            setQuery={setQuery}
+            notifications={notifications}
+            notificationsOpen={notificationsOpen}
+            setNotificationsOpen={setNotificationsOpen}
+            onClearNotifications={() => setNotifications([])}
+            onNotificationClick={handleNotificationClick}
+            bellPulse={bellPulse}
+          />
 
           {errorBanner ? (
             <div className="mx-auto max-w-[1400px] px-4 pt-4 sm:px-6">
@@ -1843,10 +2116,22 @@ export default function DashboardPage() {
               setCreateCaseModalOpen(false);
               setCreateCaseThreadId(null);
             }}
-            onCaseCreated={() => {
+            onCaseCreated={(mode) => {
               if (userId) {
+                // Refresh data
                 getCases(userId).then(r => setActiveCases(r.cases)).catch(() => { });
                 getThreads(userId).then(r => setApiThreads(r.threads)).catch(() => { });
+
+                // Handle Mode
+                if (mode === "manual") {
+                  // Open Control Panel (ReplySettingsDrawer)
+                  setThreadDetailId(createCaseThreadId);
+                  setSettingsDrawerOpen(true);
+                } else {
+                  // Auto Mode: Immediately trigger draft generation
+                  // We need to simulate "New Email" flow but for this existing thread that just became a case
+                  openReplyModalForNewEmail(createCaseThreadId);
+                }
               }
             }}
           />

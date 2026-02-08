@@ -199,6 +199,7 @@ export async function createCase(
     merchantName?: string;
     issueDescription?: string;
     desiredOutcome?: string;
+    mode?: "auto" | "manual";
   }
 ): Promise<{ case: any }> {
   const res = await fetch(`${API_URL}/api/cases`, {
@@ -225,8 +226,89 @@ export async function getCaseByThreadId(userId: string, threadId: string): Promi
   if (!res.ok) throw new Error("Failed to fetch case");
   return res.json();
 }
-export async function getCases(userId: string): Promise<{ cases: any[] }> {
+export interface Case {
+  id: string;
+  caseReferenceId: string;
+  merchantName: string | null;
+  issueDescription: string | null;
+  desiredOutcome: string | null;
+  status: "draft" | "sent" | "open" | "resolved";
+  mode: "auto" | "manual";
+  nextAction: string | null;
+  lastAction: string | null;
+  updatedAt: string;
+  createdAt: string;
+  userId: string;
+}
+
+export async function getCases(userId: string): Promise<{ cases: Case[] }> {
   const res = await fetch(`${API_URL}/api/cases?userId=${encodeURIComponent(userId)}`);
   if (!res.ok) throw new Error("Failed to fetch cases");
   return res.json();
+}
+
+// --- Notifications ---
+
+export type NotificationPayload = {
+  id: string;
+  type: "autonomous_reply" | "reply_sent" | "support_detected" | "human_intervention";
+  title: string;
+  message?: string;
+  subject?: string;
+  threadId?: string;
+  timestamp: number;
+};
+
+export async function getNotifications(
+  userId: string,
+  limit = 10,
+  offset = 0
+): Promise<{ notifications: NotificationPayload[]; hasMore: boolean }> {
+  try {
+    const res = await fetch(
+      `${API_URL}/api/users/notifications?userId=${encodeURIComponent(userId)}&limit=${limit}&offset=${offset}`
+    );
+    if (!res.ok) {
+      if (res.status === 404) return { notifications: [], hasMore: false };
+      throw new Error("Failed to fetch notifications");
+    }
+    return res.json();
+  } catch (e) {
+    console.error("Notification fetch failed", e);
+    return { notifications: [], hasMore: false };
+  }
+}
+
+export async function createNotification(
+  userId: string,
+  data: { type: NotificationPayload["type"]; title: string; message?: string; subject?: string; threadId?: string }
+): Promise<NotificationPayload> {
+  try {
+    const res = await fetch(`${API_URL}/api/users/notifications`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId, ...data }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      // Fallback for missing backend endpoint during dev
+      if (res.status === 404) {
+        return {
+          id: Math.random().toString(36).substring(7),
+          timestamp: Date.now(),
+          ...data
+        } as NotificationPayload;
+      }
+      const msg = (body as { error?: string }).error ?? "Failed to create notification";
+      throw new Error(msg);
+    }
+    return body as NotificationPayload;
+  } catch (e) {
+    console.error("Notification create failed", e);
+    return {
+      id: "temp-" + Date.now(),
+      timestamp: Date.now(),
+      ...data
+    } as NotificationPayload;
+  }
 }

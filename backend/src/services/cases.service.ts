@@ -9,6 +9,7 @@ export async function createCase(
         merchantName?: string;
         issueDescription?: string;
         desiredOutcome?: string;
+        mode?: "auto" | "manual";
     }
 ) {
     const db = getDb();
@@ -38,6 +39,7 @@ export async function createCase(
             issueDescription: data.issueDescription,
             desiredOutcome: data.desiredOutcome,
             status: "open",
+            mode: data.mode ?? "manual",
         })
         .returning();
 
