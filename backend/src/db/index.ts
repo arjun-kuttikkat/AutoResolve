@@ -21,6 +21,9 @@ export function getDb() {
         ssl: { rejectUnauthorized: false },
       }),
     });
+    pool.on("error", (err) => {
+      console.error("DB pool error:", err.message);
+    });
   }
   return drizzle(pool, { schema });
 }
