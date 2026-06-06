@@ -201,6 +201,16 @@ export async function processMessage(userId: string, messageId: string): Promise
     .limit(1);
   if (existingReply) return;
 
+  // Only one reply per thread: if we already sent a reply in this thread, don't send another
+  const [threadAlreadyReplied] = await db
+    .select({ id: emailReplies.id })
+    .from(emailReplies)
+    .where(
+      and(eq(emailReplies.userId, userId), eq(emailReplies.threadId, thread.id), eq(emailReplies.status, "sent"))
+    )
+    .limit(1);
+  if (threadAlreadyReplied) return;
+
   // Guardrails: only trigger if email matches user's trigger description
   const [guardrails] = await db
     .select()
@@ -341,6 +351,14 @@ export async function processMessage(userId: string, messageId: string): Promise
   const shouldSend = mode === "auto" && safety.passed;
 
   if (shouldSend) {
+    // Re-fetch so we only send if still draft (avoids duplicate send if another job sent for same thread)
+    const [current] = await db
+      .select({ status: emailReplies.status })
+      .from(emailReplies)
+      .where(eq(emailReplies.id, reply.id))
+      .limit(1);
+    if (current?.status !== "draft") return;
+
     try {
       const replyTo = from;
       const replyFrom = to;

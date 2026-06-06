@@ -8,6 +8,9 @@ function getConnection(): IORedis {
   if (!connection) {
     const env = getEnv();
     connection = new IORedis(env.REDIS_URL, { maxRetriesPerRequest: null });
+    connection.on("error", (err: Error) => {
+      console.error("Redis connection error:", err.message);
+    });
   }
   return connection;
 }

@@ -13,25 +13,44 @@ import { processMessage } from "./services/processMessage.js";
 import type { SyncMailboxJobData, ProcessMessageJobData } from "./lib/queue.js";
 import type { Job } from "bullmq";
 
+// Keep process alive: log and absorb unhandled rejections (e.g. from pool/network blips)
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("Unhandled rejection:", reason);
+});
+
+// Log uncaught exceptions but do not exit — keep process alive for long runs (e.g. 10+ hrs)
+process.on("uncaughtException", (err: Error) => {
+  console.error("Uncaught exception:", err);
+});
+
 const app = express();
 const env = getEnv();
 
 // Start mailbox worker in-process so sync/processMessage jobs run without separate "npm run worker"
 const mailboxWorker = createMailboxWorker(
   async (job: Job<SyncMailboxJobData | ProcessMessageJobData>) => {
-    const name = job.name;
-    const data = job.data;
-    if (name === "syncMailbox" && "userId" in data) {
-      await syncMailbox(data.userId);
-      return;
+    try {
+      const name = job.name;
+      const data = job.data;
+      if (name === "syncMailbox" && "userId" in data) {
+        await syncMailbox(data.userId);
+        return;
+      }
+      if (name === "processMessage" && "userId" in data && "messageId" in data) {
+        await processMessage(data.userId, data.messageId);
+        return;
+      }
+      throw new Error(`Unknown job name: ${name}`);
+    } catch (err) {
+      // Re-throw so BullMQ marks job failed and retries; prevents unhandled rejection
+      console.error("Mailbox job error:", job?.name, job?.id, err);
+      throw err;
     }
-    if (name === "processMessage" && "userId" in data && "messageId" in data) {
-      await processMessage(data.userId, data.messageId);
-      return;
-    }
-    throw new Error(`Unknown job name: ${name}`);
   }
 );
+mailboxWorker.on("error", (err: Error) => {
+  console.error("Mailbox worker error:", err.message);
+});
 mailboxWorker.on("failed", (job, err) => {
   console.error("Mailbox job failed:", job?.id, job?.name, err);
 });
