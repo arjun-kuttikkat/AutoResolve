@@ -9,5 +9,6 @@
     "start": "npm run start --prefix web",
     "start:backend": "npm run start --prefix backend",
     "lint": "npm run lint --prefix web"
-  }
+  },
+  "version": "1.0.0"
 }
