@@ -54,7 +54,7 @@ Answer with only YES or NO: should we auto-reply to this email?`;
     max_tokens: 10,
   });
   const answer = completion.choices[0]?.message?.content?.trim().toUpperCase();
-  return answer === "YES" || answer?.startsWith("YES");
+  return answer === "YES" || (answer?.startsWith("YES") ?? false);
 }
 
 /** Classification result: whether we can auto-reply, need human, or should escalate. */

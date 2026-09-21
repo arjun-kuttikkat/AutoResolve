@@ -53,8 +53,8 @@ export async function getProfile(oauth2Client: OAuth2Client): Promise<{ emailAdd
   const res = await gmail.users.getProfile({ userId: "me" });
   return {
     emailAddress: res.data.emailAddress!,
-    messagesTotal: res.data.messagesTotal,
-    threadsTotal: res.data.threadsTotal,
+    messagesTotal: res.data.messagesTotal ?? undefined,
+    threadsTotal: res.data.threadsTotal ?? undefined,
     historyId: res.data.historyId ?? undefined,
   };
 }
