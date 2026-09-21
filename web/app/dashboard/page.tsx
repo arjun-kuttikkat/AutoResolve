@@ -4,7 +4,7 @@
 // Tailwind required. Framer Motion + lucide-react required.
 // Drop-in for Next.js App Router: app/dashboard/page.tsx (or any route).
 
-import React, { Fragment, useMemo, useState, useEffect, useRef } from "react";
+import React, { Fragment, Suspense, useMemo, useState, useEffect, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import { GeistSans, GeistMono } from "geist/font";
@@ -605,6 +605,14 @@ const POLL_NORMAL_MS = 30000;
 const AUTO_SEND_COUNTDOWN_SEC = 10;
 
 export default function DashboardPage() {
+  return (
+    <Suspense fallback={null}>
+      <DashboardPageInner />
+    </Suspense>
+  );
+}
+
+function DashboardPageInner() {
   const searchParams = useSearchParams();
   const [active, setActive] = useState("inbox");
   const [query, setQuery] = useState("");
