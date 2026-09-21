@@ -16,6 +16,11 @@ function getUserId(req: Request): string | null {
   return (req.query.userId as string) ?? (req.body?.userId as string) ?? null;
 }
 
+function getParam(req: Request, name: string): string {
+  const value = req.params[name];
+  return String(Array.isArray(value) ? value[0] : value ?? "");
+}
+
 router.post("/sync", async (req: Request, res: Response) => {
   const userId = getUserId(req);
   if (!userId) {
@@ -57,7 +62,7 @@ router.get("/threads", async (req: Request, res: Response) => {
 
 router.get("/threads/:threadId", async (req: Request, res: Response) => {
   const userId = getUserId(req);
-  const threadId = req.params.threadId;
+  const threadId = getParam(req, "threadId");
   if (!userId || !threadId) {
     return res.status(400).json({ error: "userId and threadId required" });
   }
@@ -80,7 +85,7 @@ router.get("/threads/:threadId", async (req: Request, res: Response) => {
 
 router.post("/threads/:threadId/generate-reply", async (req: Request, res: Response) => {
   const userId = getUserId(req);
-  const threadId = req.params.threadId;
+  const threadId = getParam(req, "threadId");
   const body = req.body as { takeOver?: boolean; context?: string };
   const takeOver = body.takeOver === true;
   const context = typeof body.context === "string" ? body.context.trim() : undefined;
@@ -114,7 +119,7 @@ router.get("/replies", async (req: Request, res: Response) => {
 
 router.post("/replies/:replyId/approve", async (req: Request, res: Response) => {
   const userId = getUserId(req);
-  const replyId = req.params.replyId;
+  const replyId = getParam(req, "replyId");
   const bodyContent = (req.body as { content?: string }).content;
   if (!userId || !replyId) {
     return res.status(400).json({ error: "userId and replyId required" });
@@ -218,7 +223,7 @@ router.post("/replies/:replyId/approve", async (req: Request, res: Response) => 
 
 router.post("/replies/:replyId/reject", async (req: Request, res: Response) => {
   const userId = getUserId(req);
-  const replyId = req.params.replyId;
+  const replyId = getParam(req, "replyId");
   if (!userId || !replyId) {
     return res.status(400).json({ error: "userId and replyId required" });
   }
