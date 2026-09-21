@@ -1,13 +1,13 @@
 import { Queue, Worker, type Job } from "bullmq";
-import IORedis from "ioredis";
+import { Redis } from "ioredis";
 import { getEnv } from "../config/env.js";
 
-let connection: IORedis | null = null;
+let connection: Redis | null = null;
 
-function getConnection(): IORedis {
+function getConnection(): Redis {
   if (!connection) {
     const env = getEnv();
-    connection = new IORedis(env.REDIS_URL, { maxRetriesPerRequest: null });
+    connection = new Redis(env.REDIS_URL, { maxRetriesPerRequest: null });
     connection.on("error", (err: Error) => {
       console.error("Redis connection error:", err.message);
     });
