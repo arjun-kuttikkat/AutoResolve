@@ -1,4 +1,6 @@
 import { getDb } from "../db/index.js";
+import type { gmail_v1 } from "googleapis";
+import type { GaxiosResponse } from "gaxios";
 import { users, emails, emailThreads } from "../db/schema.js";
 import { eq } from "drizzle-orm";
 import { enqueueProcessMessage } from "../lib/queue.js";
@@ -61,7 +63,7 @@ export async function syncMailbox(userId: string): Promise<void> {
   const client = createClientWithTokens(accessToken, refreshToken);
   const gmail = getGmailClient(client);
 
-  let lastHistoryId = user.lastHistoryId ?? undefined;
+  let lastHistoryId: string | undefined = user.lastHistoryId ?? undefined;
   let nextPageToken: string | undefined;
   let latestHistoryIdSeen: string | undefined;
 
@@ -105,21 +107,22 @@ export async function syncMailbox(userId: string): Promise<void> {
 
   try {
     do {
-      const history = await gmail.users.history.list({
+      const historyList: GaxiosResponse<gmail_v1.Schema$ListHistoryResponse> =
+        await gmail.users.history.list({
         userId: "me",
         startHistoryId: lastHistoryId,
         historyTypes: ["messageAdded"],
         pageToken: nextPageToken ?? undefined,
       });
 
-      nextPageToken = history.data.nextPageToken ?? undefined;
-      if (history.data.historyId) latestHistoryIdSeen = String(history.data.historyId);
+      nextPageToken = historyList.data.nextPageToken ?? undefined;
+      if (historyList.data.historyId) latestHistoryIdSeen = String(historyList.data.historyId);
 
-      if (!history.data.history || history.data.history.length === 0) {
+      if (!historyList.data.history || historyList.data.history.length === 0) {
         break;
       }
 
-      for (const historyItem of history.data.history) {
+      for (const historyItem of historyList.data.history) {
         const messagesAdded = historyItem.messagesAdded;
         if (!messagesAdded) continue;
         for (const msg of messagesAdded) {
@@ -170,10 +173,11 @@ export async function syncMailbox(userId: string): Promise<void> {
           await enqueueProcessMessage(userId, msg.id);
         }
       }
-      if (list.length > 0) {
+      const firstMessageId = list[0]?.id;
+      if (firstMessageId) {
         const latest = await gmail.users.messages.get({
           userId: "me",
-          id: list[0].id,
+          id: firstMessageId,
           format: "metadata",
         });
         const newHistoryId = latest.data.historyId ? String(latest.data.historyId) : null;
